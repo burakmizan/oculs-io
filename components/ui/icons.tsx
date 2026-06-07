@@ -207,6 +207,114 @@ export function ExternalLink(props: IconProps) {
   );
 }
 
+/* ── Layout Grid (overview/home) ── */
+export function LayoutGrid(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M2 2H7V7H2V2ZM9 2H14V7H9V2ZM2 9H7V14H2V9ZM9 9H14V14H9V9Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </Icon>
+  );
+}
+
+/* ── Scan / Activity ── */
+export function ScanIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M2 5H14M2 8H14M2 11H8"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="11" r="2" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M13.4 12.4L15 14"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </Icon>
+  );
+}
+
+/* ── Alert Triangle (findings) ── */
+export function AlertTriangle(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M8 2L14.5 13H1.5L8 2Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M8 6V9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="8" cy="11.5" r="0.75" fill="currentColor" />
+    </Icon>
+  );
+}
+
+/* ── Cog (settings) ── */
+export function Cog(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M8 1.5V3M8 13V14.5M1.5 8H3M13 8H14.5M3.2 3.2L4.3 4.3M11.7 11.7L12.8 12.8M3.2 12.8L4.3 11.7M11.7 4.3L12.8 3.2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </Icon>
+  );
+}
+
+/* ── Log Out ── */
+export function LogOut(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M6 2H3C2.45 2 2 2.45 2 3V13C2 13.55 2.45 14 3 14H6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 5L13.5 8L10 11"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13.5 8H6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </Icon>
+  );
+}
+
+/* ── Plus ── */
+export function Plus(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M8 3V13M3 8H13"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </Icon>
+  );
+}
+
 /* ── GitHub logo mark ── */
 export function GitHub({ size = 16, ...props }: IconProps) {
   return (

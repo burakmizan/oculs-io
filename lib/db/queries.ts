@@ -1,0 +1,173 @@
+import { eq, and, count, desc, inArray } from "drizzle-orm"
+import { db } from "@/lib/db"
+import {
+  users,
+  projects,
+  scans,
+  vulnerabilities,
+  type User,
+} from "@/lib/db/schema"
+import type { DashboardStats, SeverityLevel, ScanTool } from "@/types"
+
+/**
+ * Data-access helpers. Kept free of request/runtime concerns so they can be
+ * reused from server actions, route handlers, and the Credentials provider.
+ */
+
+/* ── Auth ──────────────────────────────────────────────────────────── */
+
+export async function getUserByEmail(email: string): Promise<User | null> {
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email.toLowerCase()))
+    .limit(1)
+  return user ?? null
+}
+
+export async function createCredentialsUser(input: {
+  name: string
+  email: string
+  passwordHash: string
+}): Promise<User> {
+  const [user] = await db
+    .insert(users)
+    .values({
+      name: input.name,
+      email: input.email.toLowerCase(),
+      passwordHash: input.passwordHash,
+    })
+    .returning()
+  return user
+}
+
+/* ── Dashboard ─────────────────────────────────────────────────────── */
+
+/** Severity weights for the 0–100 composite risk score. */
+const RISK_WEIGHTS: Record<SeverityLevel, number> = {
+  critical: 40,
+  high: 20,
+  medium: 8,
+  low: 2,
+  info: 0,
+}
+
+export async function getDashboardStats(
+  userId: string,
+): Promise<DashboardStats> {
+  const [projectCount, scanCount, openBySeverity] = await Promise.all([
+    db.select({ c: count() }).from(projects).where(eq(projects.userId, userId)),
+    db.select({ c: count() }).from(scans).where(eq(scans.userId, userId)),
+    db
+      .select({ severity: vulnerabilities.severity, c: count() })
+      .from(vulnerabilities)
+      .where(
+        and(
+          eq(vulnerabilities.userId, userId),
+          inArray(vulnerabilities.status, ["open", "in_review"]),
+        ),
+      )
+      .groupBy(vulnerabilities.severity),
+  ])
+
+  const openVulnerabilities = openBySeverity.reduce((sum, r) => sum + r.c, 0)
+  const weighted = openBySeverity.reduce(
+    (sum, r) => sum + RISK_WEIGHTS[r.severity] * r.c,
+    0,
+  )
+
+  return {
+    projects: projectCount[0]?.c ?? 0,
+    scans: scanCount[0]?.c ?? 0,
+    openVulnerabilities,
+    // No scans yet → no meaningful score.
+    riskScore: (scanCount[0]?.c ?? 0) === 0 ? null : Math.min(100, weighted),
+  }
+}
+
+export interface RecentScanRow {
+  id: string
+  repoFullName: string
+  status: string
+  tools: ScanTool[]
+  vulnerabilitiesCount: number
+  createdAt: Date
+}
+
+export async function getRecentScans(
+  userId: string,
+  limit = 6,
+): Promise<RecentScanRow[]> {
+  return db
+    .select({
+      id: scans.id,
+      repoFullName: projects.repoFullName,
+      status: scans.status,
+      tools: scans.tools,
+      vulnerabilitiesCount: scans.vulnerabilitiesCount,
+      createdAt: scans.createdAt,
+    })
+    .from(scans)
+    .innerJoin(projects, eq(scans.projectId, projects.id))
+    .where(eq(scans.userId, userId))
+    .orderBy(desc(scans.createdAt))
+    .limit(limit)
+}
+
+export interface ProjectOption {
+  id: string
+  repoFullName: string
+  targetUrl: string | null
+}
+
+export async function getUserProjects(
+  userId: string,
+): Promise<ProjectOption[]> {
+  return db
+    .select({
+      id: projects.id,
+      repoFullName: projects.repoFullName,
+      targetUrl: projects.targetUrl,
+    })
+    .from(projects)
+    .where(eq(projects.userId, userId))
+    .orderBy(desc(projects.updatedAt))
+}
+
+/* ── Scan orchestration ────────────────────────────────────────────── */
+
+/** Idempotently resolve a project for `owner/repo`, then queue a scan. */
+export async function queueScan(input: {
+  userId: string
+  repoFullName: string
+  targetUrl: string | null
+  tools: ScanTool[]
+}): Promise<string> {
+  const [project] = await db
+    .insert(projects)
+    .values({
+      userId: input.userId,
+      name: input.repoFullName.split("/").pop() ?? input.repoFullName,
+      repoFullName: input.repoFullName,
+      repoUrl: `https://github.com/${input.repoFullName}`,
+      targetUrl: input.targetUrl,
+    })
+    .onConflictDoUpdate({
+      target: [projects.userId, projects.repoFullName],
+      set: { targetUrl: input.targetUrl, updatedAt: new Date() },
+    })
+    .returning({ id: projects.id })
+
+  const [scan] = await db
+    .insert(scans)
+    .values({
+      projectId: project.id,
+      userId: input.userId,
+      tools: input.tools,
+      status: "queued",
+      trigger: "manual",
+    })
+    .returning({ id: scans.id })
+
+  return scan.id
+}
