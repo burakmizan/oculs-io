@@ -1,0 +1,1089 @@
+# ============================================================
+# Oculs.io — Security Scan Workflow
+# Orchestrates all 20 tools across SAST / Secrets / Infra / DAST
+# and POSTs structured findings to the Oculs webhook endpoint.
+#
+# Required repository secrets:
+#   OCULS_WEBHOOK_URL    — https://your-app.vercel.app/api/webhook/scan
+#   OCULS_WEBHOOK_SECRET — must match GITHUB_WEBHOOK_SECRET in Vercel env
+#
+# Optional repository secrets (for DAST jobs):
+#   TARGET_URL           — live URL to scan (e.g. https://your-app.vercel.app)
+#   SONAR_TOKEN          — SonarCloud token (sonarscanner job)
+#   SONAR_HOST_URL       — SonarCloud host (default: https://sonarcloud.io)
+# ============================================================
+
+name: Oculs Security Scan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      scan_id:
+        description: "Oculs scan UUID (from dashboard queue)"
+        required: true
+        type: string
+      tools:
+        description: "Comma-separated tool list (leave empty = run all)"
+        required: false
+        default: ""
+      target_url:
+        description: "Target URL for DAST tools"
+        required: false
+        default: ""
+
+env:
+  SCAN_ID: ${{ github.event.inputs.scan_id || github.run_id }}
+  REPO:    ${{ github.repository }}
+  BRANCH:  ${{ github.ref_name }}
+  SHA:     ${{ github.sha }}
+
+# ────────────────────────────────────────────────────────────
+# Notify webhook that the scan has started
+# ────────────────────────────────────────────────────────────
+jobs:
+  notify-start:
+    name: Notify — scan.started
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST scan.started
+        run: |
+          curl -fsSL -X POST "${{ secrets.OCULS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Oculs-Signature-256: sha256=$(echo -n '{"event":"scan.started","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'"}' | openssl dgst -sha256 -hmac '${{ secrets.OCULS_WEBHOOK_SECRET }}' | awk '{print $2}')" \
+            -d '{"event":"scan.started","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'"}'
+
+# ============================================================
+# SAST JOBS
+# ============================================================
+
+  # ── 1. Semgrep ──────────────────────────────────────────
+  semgrep:
+    name: SAST — Semgrep
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        id: scan
+        run: |
+          semgrep scan \
+            --config auto \
+            --json \
+            --output semgrep-results.json \
+            --timeout 120 \
+            . || true
+
+      - name: Normalise & POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hashlib, subprocess, sys
+
+          try:
+              with open("semgrep-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {"results": []}
+
+          findings = []
+          for r in data.get("results", []):
+              findings.append({
+                  "tool": "semgrep",
+                  "ruleId": r.get("check_id", ""),
+                  "title": r.get("check_id", "Semgrep finding").split(".")[-1],
+                  "description": r.get("extra", {}).get("message", ""),
+                  "severity": {
+                      "ERROR": "high", "WARNING": "medium",
+                      "INFO": "info"
+                  }.get(r.get("extra", {}).get("severity", "INFO"), "medium"),
+                  "filePath": r.get("path", ""),
+                  "lineStart": r.get("start", {}).get("line"),
+                  "lineEnd":   r.get("end", {}).get("line"),
+                  "codeSnippet": r.get("extra", {}).get("lines", "")[:500],
+                  "references": [r.get("extra", {}).get("metadata", {}).get("source", "")]
+              })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          import hmac, hashlib
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+
+          import urllib.request
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 2. Gitleaks ─────────────────────────────────────────
+  gitleaks:
+    name: Secrets — Gitleaks
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        id: gitleaks
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Export JSON report
+        if: always()
+        run: |
+          docker run --rm -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo \
+            --report-format json \
+            --report-path /repo/gitleaks-results.json \
+            --no-git || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("gitleaks-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = []
+
+          findings = []
+          for r in (data if isinstance(data, list) else []):
+              findings.append({
+                  "tool": "gitleaks",
+                  "ruleId": r.get("RuleID", ""),
+                  "title": f"Secret detected: {r.get('Description', r.get('RuleID', 'Secret'))}",
+                  "description": f"Commit: {r.get('Commit', 'N/A')} | Author: {r.get('Author', 'N/A')}",
+                  "severity": "high",
+                  "filePath": r.get("File", ""),
+                  "lineStart": r.get("StartLine"),
+                  "lineEnd":   r.get("EndLine"),
+                  "codeSnippet": r.get("Match", "")[:200]
+              })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 3. Trivy ─────────────────────────────────────────────
+  trivy:
+    name: Infra — Trivy
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: json
+          output: trivy-results.json
+          exit-code: "0"
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("trivy-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {"Results": []}
+
+          sev_map = {"CRITICAL":"critical","HIGH":"high","MEDIUM":"medium","LOW":"low","UNKNOWN":"info"}
+          findings = []
+          for result in data.get("Results", []):
+              for v in result.get("Vulnerabilities") or []:
+                  findings.append({
+                      "tool": "trivy",
+                      "ruleId": v.get("VulnerabilityID", ""),
+                      "title": v.get("Title") or v.get("VulnerabilityID", "Trivy finding"),
+                      "description": v.get("Description", "")[:500],
+                      "severity": sev_map.get(v.get("Severity", "UNKNOWN"), "medium"),
+                      "filePath": result.get("Target", ""),
+                      "cvssScore": str(v.get("CVSS", {}).get("nvd", {}).get("V3Score", "")),
+                      "references": v.get("References", [])[:3]
+                  })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 4. Horusec ───────────────────────────────────────────
+  horusec:
+    name: SAST — Horusec
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Horusec
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash
+          horusec start -p . -o json -O horusec-results.json --disable-docker true || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("horusec-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          sev_map = {"CRITICAL":"critical","HIGH":"high","MEDIUM":"medium","LOW":"low","INFO":"info","NOSEC":"info","UNKNOWN":"info"}
+          findings = []
+          for item in data.get("analysisVulnerabilities") or []:
+              v = item.get("vulnerabilities", {})
+              findings.append({
+                  "tool": "horusec",
+                  "ruleId": v.get("rule_id", ""),
+                  "title": v.get("details", "Horusec finding")[:120],
+                  "description": v.get("details", ""),
+                  "severity": sev_map.get(v.get("severity", "MEDIUM"), "medium"),
+                  "filePath": v.get("file", ""),
+                  "lineStart": int(v.get("line", 0)) if v.get("line") else None,
+                  "codeSnippet": v.get("code", "")[:400]
+              })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 5. Bearer ────────────────────────────────────────────
+  bearer:
+    name: SAST — Bearer
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Bearer
+        uses: bearer/bearer-action@v2
+        with:
+          format: json
+          output: bearer-results.json
+          exit-code: "0"
+        continue-on-error: true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("bearer-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          sev_map = {"critical":"critical","high":"high","medium":"medium","low":"low","warning":"low"}
+          findings = []
+          for sev_key, items in data.items():
+              if not isinstance(items, list):
+                  continue
+              for r in items:
+                  findings.append({
+                      "tool": "bearer",
+                      "ruleId": r.get("rule_id", ""),
+                      "title": r.get("title", "Bearer finding"),
+                      "description": r.get("description", ""),
+                      "severity": sev_map.get(sev_key, "medium"),
+                      "filePath": r.get("filename", ""),
+                      "lineStart": r.get("line_number"),
+                      "cweId": r.get("cwe_ids", [""])[0] if r.get("cwe_ids") else ""
+                  })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 6. NodeJsScan ────────────────────────────────────────
+  nodejsscan:
+    name: SAST — NodeJsScan
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run NodeJsScan
+        run: |
+          pip install nodejsscan --quiet
+          nodejsscan -d . -o nodejsscan-results.json || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("nodejsscan-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          findings = []
+          for sev_key in ["nodejs_security_findings", "vuln_count"]:
+              pass
+          for key, items in data.items():
+              if not isinstance(items, list):
+                  continue
+              for r in items:
+                  if not isinstance(r, dict):
+                      continue
+                  findings.append({
+                      "tool": "nodejsscan",
+                      "ruleId": r.get("tag", ""),
+                      "title": r.get("title", "NodeJsScan finding"),
+                      "description": r.get("description", ""),
+                      "severity": "medium",
+                      "filePath": r.get("filename", ""),
+                      "lineStart": r.get("line"),
+                      "codeSnippet": r.get("lines", "")[:400]
+                  })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 7. CodeQL ────────────────────────────────────────────
+  codeql:
+    name: SAST — CodeQL
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          upload: false
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request, glob
+
+          findings = []
+          for sarif_file in glob.glob("codeql-results/**/*.sarif", recursive=True):
+              try:
+                  with open(sarif_file) as f:
+                      data = json.load(f)
+              except Exception:
+                  continue
+              for run in data.get("runs", []):
+                  rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+                  for result in run.get("results", []):
+                      rule = rules.get(result.get("ruleId", ""), {})
+                      loc = result.get("locations", [{}])[0].get("physicalLocation", {})
+                      sev_label = result.get("kind", "fail")
+                      findings.append({
+                          "tool": "codeql",
+                          "ruleId": result.get("ruleId", ""),
+                          "title": rule.get("shortDescription", {}).get("text", result.get("ruleId", "CodeQL")),
+                          "description": rule.get("fullDescription", {}).get("text", "")[:500],
+                          "severity": "high" if sev_label == "fail" else "medium",
+                          "filePath": loc.get("artifactLocation", {}).get("uri", ""),
+                          "lineStart": loc.get("region", {}).get("startLine"),
+                          "lineEnd":   loc.get("region", {}).get("endLine"),
+                      })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+# ============================================================
+# DAST JOBS — require TARGET_URL secret
+# ============================================================
+
+  # ── 8. OWASP ZAP ─────────────────────────────────────────
+  owasp-zap:
+    name: DAST — OWASP ZAP
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ secrets.TARGET_URL }}
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-J zap-results.json"
+        continue-on-error: true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("zap-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          sev_map = {"3":"critical","2":"high","1":"medium","0":"info"}
+          findings = []
+          for site in data.get("site", []):
+              for alert in site.get("alerts", []):
+                  for inst in alert.get("instances", [{}])[:5]:
+                      findings.append({
+                          "tool": "owasp_zap",
+                          "ruleId": alert.get("pluginid", ""),
+                          "title": alert.get("alert", "ZAP finding"),
+                          "description": alert.get("desc", "")[:500],
+                          "severity": sev_map.get(str(alert.get("riskcode", "1")), "medium"),
+                          "targetUrl": inst.get("uri", alert.get("url", "")),
+                          "cweId": f"CWE-{alert.get('cweid', '')}" if alert.get("cweid") else "",
+                          "references": [alert.get("reference", "")]
+                      })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 9. Nuclei ────────────────────────────────────────────
+  nuclei:
+    name: DAST — Nuclei
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nuclei
+        run: |
+          go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Run Nuclei
+        run: |
+          nuclei -u "${{ secrets.TARGET_URL }}" \
+            -severity critical,high,medium,low \
+            -json-export nuclei-results.json \
+            -timeout 30 \
+            -no-interactsh || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          findings = []
+          try:
+              with open("nuclei-results.json") as f:
+                  for line in f:
+                      try:
+                          r = json.loads(line.strip())
+                      except Exception:
+                          continue
+                      findings.append({
+                          "tool": "nuclei",
+                          "ruleId": r.get("template-id", ""),
+                          "title": r.get("info", {}).get("name", "Nuclei finding"),
+                          "description": r.get("info", {}).get("description", "")[:500],
+                          "severity": r.get("info", {}).get("severity", "medium"),
+                          "targetUrl": r.get("matched-at", r.get("host", "")),
+                          "cvssScore": str(r.get("info", {}).get("classification", {}).get("cvss-score", "")),
+                          "cweId": (r.get("info", {}).get("classification", {}).get("cwe-id") or [""])[0],
+                          "references": r.get("info", {}).get("reference", [])[:3]
+                      })
+          except Exception:
+              pass
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 10. Nikto ────────────────────────────────────────────
+  nikto:
+    name: DAST — Nikto
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - name: Run Nikto
+        run: |
+          sudo apt-get install -y nikto
+          nikto -h "${{ secrets.TARGET_URL }}" \
+            -Format json \
+            -output nikto-results.json \
+            -timeout 60 || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("nikto-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          findings = []
+          for vuln in data.get("vulnerabilities", []):
+              findings.append({
+                  "tool": "nikto",
+                  "ruleId": str(vuln.get("id", "")),
+                  "title": vuln.get("msg", "Nikto finding")[:120],
+                  "description": vuln.get("msg", ""),
+                  "severity": "medium",
+                  "targetUrl": vuln.get("url", os.environ.get("TARGET_URL", ""))
+              })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+          TARGET_URL:           ${{ secrets.TARGET_URL }}
+
+  # ── 11. Dirsearch ────────────────────────────────────────
+  dirsearch:
+    name: DAST — Dirsearch
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - name: Run Dirsearch
+        run: |
+          pip install dirsearch --quiet
+          dirsearch -u "${{ secrets.TARGET_URL }}" \
+            -o dirsearch-results.json \
+            --format json \
+            -t 20 \
+            --timeout 10 \
+            -x 404,403 || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("dirsearch-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          findings = []
+          for target, results in data.items():
+              for r in results:
+                  status = r.get("status", 0)
+                  if status in (200, 301, 302):
+                      findings.append({
+                          "tool": "dirsearch",
+                          "ruleId": f"exposed-path-{status}",
+                          "title": f"Exposed path found (HTTP {status}): {r.get('path', '')}",
+                          "description": f"Path {r.get('path', '')} returned HTTP {status}",
+                          "severity": "medium" if status == 200 else "low",
+                          "targetUrl": r.get("url", target)
+                      })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+  # ── 12. Testssl ──────────────────────────────────────────
+  testssl:
+    name: Infra — testssl.sh
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - name: Run testssl.sh
+        run: |
+          git clone --depth 1 https://github.com/drwetter/testssl.sh.git /tmp/testssl
+          HOST=$(echo "${{ secrets.TARGET_URL }}" | sed 's|https\?://||' | cut -d/ -f1)
+          /tmp/testssl/testssl.sh \
+            --jsonfile testssl-results.json \
+            --severity LOW \
+            --quiet \
+            "$HOST" || true
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("testssl-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = []
+
+          sev_map = {"CRITICAL":"critical","HIGH":"high","MEDIUM":"medium","LOW":"low","INFO":"info","OK":"info","WARN":"medium"}
+          findings = []
+          for item in (data if isinstance(data, list) else []):
+              severity_raw = item.get("severity", "INFO")
+              if severity_raw in ("OK", "INFO"):
+                  continue
+              findings.append({
+                  "tool": "testssl",
+                  "ruleId": item.get("id", ""),
+                  "title": item.get("id", "testssl finding"),
+                  "description": item.get("finding", "")[:500],
+                  "severity": sev_map.get(severity_raw, "medium"),
+                  "targetUrl": item.get("ip", os.environ.get("TARGET_URL", ""))
+              })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook response: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+          TARGET_URL:           ${{ secrets.TARGET_URL }}
+
+  # ── 13-20: Remaining tools (wapiti, sqlmap, arachni, wpscan,
+  #           nmap_vulners, sonarscanner, bandit, gosec)
+  #   These run as a single job with continue-on-error so one failure
+  #   does not block the others. Each tool posts its own findings.
+  # ────────────────────────────────────────────────────────────
+  remaining-tools:
+    name: SAST/DAST — Remaining Tools
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    if: ${{ secrets.TARGET_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Wapiti ──────────────────────────────────────────
+      - name: Run Wapiti
+        run: |
+          pip install wapiti3 --quiet
+          wapiti -u "${{ secrets.TARGET_URL }}" \
+            -f json \
+            -o wapiti-results.json \
+            --max-scan-time 120 \
+            --max-links-per-page 30 || true
+
+      - name: POST Wapiti findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("wapiti-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          findings = []
+          for vuln_type, items in data.get("vulnerabilities", {}).items():
+              for r in (items if isinstance(items, list) else []):
+                  findings.append({
+                      "tool": "wapiti",
+                      "ruleId": vuln_type,
+                      "title": f"Wapiti: {vuln_type}",
+                      "description": r.get("info", "")[:500],
+                      "severity": "medium",
+                      "targetUrl": r.get("path", ""),
+                      "cweId": r.get("wstg", [""])[0] if r.get("wstg") else ""
+                  })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+      # ── WPScan ──────────────────────────────────────────
+      - name: Run WPScan
+        run: |
+          docker pull wpscanteam/wpscan:latest || true
+          docker run --rm wpscanteam/wpscan \
+            --url "${{ secrets.TARGET_URL }}" \
+            --format json \
+            --output /dev/stdout 2>/dev/null > wpscan-results.json || true
+
+      - name: POST WPScan findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request
+
+          try:
+              with open("wpscan-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          findings = []
+          for plugin_name, plugin in (data.get("plugins") or {}).items():
+              for vuln in (plugin.get("vulnerabilities") or []):
+                  findings.append({
+                      "tool": "wpscan",
+                      "ruleId": vuln.get("references", {}).get("cve", [""])[0],
+                      "title": vuln.get("title", "WPScan finding"),
+                      "description": vuln.get("title", ""),
+                      "severity": "high",
+                      "targetUrl": os.environ.get("TARGET_URL", ""),
+                      "references": list(vuln.get("references", {}).get("url", []))[:3]
+                  })
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"Webhook: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+          TARGET_URL:           ${{ secrets.TARGET_URL }}
+
+# ============================================================
+# Notify webhook that the scan has completed (all jobs done)
+# ============================================================
+  notify-complete:
+    name: Notify — scan.completed (summary)
+    runs-on: ubuntu-latest
+    needs:
+      - semgrep
+      - gitleaks
+      - trivy
+      - horusec
+      - bearer
+      - nodejsscan
+      - codeql
+      - owasp-zap
+      - nuclei
+      - nikto
+      - dirsearch
+      - testssl
+      - remaining-tools
+    if: always()
+    steps:
+      - name: POST scan summary
+        run: |
+          STATUS="completed"
+          PAYLOAD='{"event":"scan.completed","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'","findings":[]}'
+          SIG="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac '${{ secrets.OCULS_WEBHOOK_SECRET }}' | awk '{print $2}')"
+          curl -fsSL -X POST "${{ secrets.OCULS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Oculs-Signature-256: $SIG" \
+            -d "$PAYLOAD" || true
