@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { auth } from "@/auth"
+import { hasCompletedOnboarding } from "@/lib/db/queries"
 import { Sidebar } from "@/components/dashboard/Sidebar"
 
 export const metadata: Metadata = {
@@ -19,6 +20,15 @@ export default async function DashboardLayout({
 
   if (!session?.user) {
     redirect("/login")
+  }
+
+  // Gate: unonboarded users must complete the wizard before using the dashboard.
+  // Wrapped in try/catch so a DB outage doesn't lock users out.
+  try {
+    const onboarded = await hasCompletedOnboarding(session.user.id)
+    if (!onboarded) redirect("/onboarding")
+  } catch {
+    // Aurora unreachable in local dev — proceed to the dashboard gracefully.
   }
 
   return (

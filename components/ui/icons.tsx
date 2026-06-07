@@ -315,6 +315,58 @@ export function Plus(props: IconProps) {
   );
 }
 
+/* ── Building / Workspace ── */
+export function Building(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M2 14V4a1 1 0 011-1h10a1 1 0 011 1v10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M1 14h14"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <rect x="5" y="9" width="2" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="9" y="9" width="2" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M5 7h2M9 7h2M5 4.5h2M9 4.5h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </Icon>
+  )
+}
+
+/* ── Upload Cloud ── */
+export function UploadCloud(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M11 10.5C12.1 10.2 13 9.2 13 8a3 3 0 00-3-3c-.2 0-.4 0-.5.1A3.5 3.5 0 005 8v.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 12.5a2.5 2.5 0 010-5c.1 0 .3 0 .4.1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8 11v4M6.5 12.5L8 11l1.5 1.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Icon>
+  )
+}
+
 /* ── GitHub logo mark ── */
 export function GitHub({ size = 16, ...props }: IconProps) {
   return (

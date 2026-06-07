@@ -15,12 +15,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Oculs.io — AI-powered Security Scanner for Vibe Coders",
+  title: "Oculs.io — AI-powered Security Scanner for Modern Developers",
   description:
     "Oculs.io runs AI-powered DAST and SAST scans directly from your GitHub Actions workflow. Instant triage, CWE mapping, and auto-fix patches in under 60 seconds.",
   keywords: [
     "DAST", "SAST", "security scanner", "GitHub Actions",
-    "AI security", "vulnerability scanner", "vibe coders",
+    "AI security", "vulnerability scanner", "modern developers", "devsecops", "vibe coders"
   ],
   openGraph: {
     title: "Oculs.io — AI-powered Security Scanner",

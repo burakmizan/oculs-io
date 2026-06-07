@@ -13,7 +13,7 @@ interface Tier {
 
 const TIERS: Tier[] = [
   {
-    name: "Hobby",
+    name: "Starter",
     price: "$0",
     period: "forever",
     description: "For solo developers exploring security scanning.",
@@ -21,9 +21,9 @@ const TIERS: Tier[] = [
     ctaHref: "/signup",
     featured: false,
     features: [
-      "Up to 3 repositories",
-      "50 scans per month",
-      "SAST + secret scanning",
+      "Up to 1 repositories",
+      "3 scans per month",
+      "SAST",
       "AI severity triage",
       "7-day finding history",
       "Community support",
@@ -31,7 +31,7 @@ const TIERS: Tier[] = [
   },
   {
     name: "Pro",
-    price: "$49",
+    price: "$19",
     period: "per month",
     description: "For teams that ship continuously and need full coverage.",
     cta: "Start free trial",
@@ -39,11 +39,10 @@ const TIERS: Tier[] = [
     featured: true,
     features: [
       "Unlimited repositories",
-      "Unlimited scans",
+      "50 scans per month",
       "SAST + DAST + secret scanning",
       "AI severity triage + CWE mapping",
       "AI auto-fix patch generation",
-      "OWASP Top 10 reporting",
       "90-day finding history",
       "Priority support",
     ],

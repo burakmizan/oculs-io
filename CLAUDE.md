@@ -101,10 +101,10 @@ npm run lint       # ESLint across all files
 npm run start      # serve production build locally
 ```
 
-Database (once Drizzle is wired up):
 ```bash
 npm run db:generate   # generate migration files from schema changes
 npm run db:migrate    # apply pending migrations to Aurora
+npm run db:studio     # open Drizzle Studio GUI for the Aurora DB
 ```
 
 There is no test runner configured yet. Add Vitest when writing the first tests.
@@ -113,22 +113,37 @@ There is no test runner configured yet. Add Vitest when writing the first tests.
 
 This is a **zero-backend** app: all server-side logic runs inside Next.js Route Handlers and React Server Components deployed to Vercel. There is no separate API server, Lambda, or container.
 
-**Request path for the core scan loop:**
-1. GitHub Actions runs SAST/DAST tools on a developer's repo.
-2. It POSTs a JSON payload to `POST /api/webhook/scan`.
-3. The route handler validates the HMAC-SHA256 signature (`GITHUB_WEBHOOK_SECRET`), calls Gemini AI for triage and auto-fix patch generation, then writes findings to AWS Aurora PostgreSQL.
-4. The Next.js dashboard reads Aurora directly via React Server Components — no polling.
+**Auth split — critical pattern:**
+Auth.js v5 requires two separate modules because the middleware runs on the Edge runtime (no Node APIs):
+- `auth.config.ts` — edge-safe config: GitHub OAuth provider, route-protection `authorized()` callback, JWT session strategy, session/JWT callbacks. **No DB imports here.**
+- `auth.ts` — Node-only: extends `authConfig` with the Drizzle adapter (persists OAuth accounts to Aurora) and the Credentials provider (bcrypt password auth).
+- `proxy.ts` — Next.js 16's renamed `middleware.ts`. Instantiates `NextAuth(authConfig)` on the Edge to enforce `/dashboard/*` protection and redirect logged-in users away from `/login`.
+
+**Request path for the core scan loop (partially implemented):**
+1. User queues a scan via `createScan` server action (`app/dashboard/actions.ts`), which calls `queueScan()` in `lib/db/queries.ts` — upserts the project and inserts a `scans` row with `status: "queued"`.
+2. *(Not yet implemented)* A GitHub Actions workflow POSTs results to `POST /api/webhook/scan`. The route handler will validate the HMAC-SHA256 signature, call the Gemini AI agent, and write `vulnerabilities` rows to Aurora.
+3. The dashboard reads Aurora directly via React Server Components — no polling. The `getDashboardStats` query computes a weighted 0–100 risk score from open vulnerability severities.
 
 **Module responsibilities:**
 
 | Path | Responsibility |
 |---|---|
-| `app/api/webhook/scan/route.ts` | Entry point for all GitHub Actions payloads |
-| `lib/db/index.ts` | Aurora PostgreSQL client (postgres.js + Drizzle) |
-| `lib/db/schema.ts` | Drizzle table definitions (projects, scans, findings, auto_fixes, users) |
-| `lib/ai/index.ts` | Gemini agent: `analyzeFindings`, `generateAutoFix`, `generateReport` |
-| `types/index.ts` | Canonical TypeScript interfaces shared across the entire app |
-| `components/ui/` | Zero-dependency, minimalist UI primitives |
+| `proxy.ts` | Edge middleware — enforces `/dashboard` auth gate |
+| `auth.config.ts` | Edge-safe Auth.js config (providers, callbacks, route protection) |
+| `auth.ts` | Node-only Auth.js instance (Drizzle adapter + Credentials provider) |
+| `app/login/actions.ts` | Server actions: `signInWithGitHub`, `signInWithCredentials`, `registerAccount` |
+| `app/dashboard/actions.ts` | Server action: `createScan` — validates input, calls `queueScan` |
+| `app/api/webhook/scan/route.ts` | **Stub** — entry point for GitHub Actions payloads (not yet implemented) |
+| `lib/db/index.ts` | Aurora PostgreSQL client (postgres.js + Drizzle, `max: 1` for serverless) |
+| `lib/db/schema.ts` | Drizzle schema: `users`, `accounts`, `sessions`, `verificationTokens`, `projects`, `scans`, `vulnerabilities` + 8 Postgres ENUMs |
+| `lib/db/queries.ts` | Data-access helpers: auth lookups, dashboard stats, scan queuing |
+| `lib/tools.ts` | 20-tool security catalog (`TOOLS`, `TOOLS_BY_ID`, `CATEGORY_META`); `id` values match the `scan_tool` Postgres ENUM exactly |
+| `lib/ai/index.ts` | **Stub** — Gemini agent placeholders (`analyzeFindings`, `generateAutoFix`, `generateReport`) |
+| `lib/auth/password.ts` | `hashPassword` / `verifyPassword` via bcryptjs (pure-JS, no native bindings) |
+| `types/index.ts` | Re-exports Drizzle-inferred row types + enum string-literal unions + view models + `WebhookPayload` contract |
+| `components/landing/` | Landing page sections (NavBar, Hero, Features, Pricing, etc.) |
+| `components/dashboard/` | Dashboard UI: `Sidebar`, `ScanLauncher`, `RecentScans` |
+| `components/auth/` | `AuthForm` — shared login/register form |
 
 ## Hard Constraints
 
@@ -139,8 +154,11 @@ This is a **zero-backend** app: all server-side logic runs inside Next.js Route 
 
 ## Key Conventions
 
-- Path alias `@/*` maps to the repo root (e.g. `import { ScanFinding } from "@/types"`).
+- Path alias `@/*` maps to the repo root (e.g. `import { ScanTool } from "@/types"`).
 - TypeScript strict mode is on. All new code must type-check cleanly.
-- `lib/ai/index.ts` should use `GEMINI_API_KEY` and `GEMINI_MODEL` env vars; default model: `gemini-1.5-pro`.
+- Row types come from Drizzle inference (`typeof table.$inferSelect`); never define manual interfaces that duplicate schema columns.
+- Tool IDs in `lib/tools.ts` (`ScanTool` string literals) must stay in sync with the `scan_tool` Postgres ENUM in `lib/db/schema.ts`.
+- `lib/ai/index.ts` must use `GEMINI_API_KEY` and `GEMINI_MODEL` env vars; default model: `gemini-3.5-flash`.
 - Webhook HMAC validation must use `GITHUB_WEBHOOK_SECRET` and timing-safe comparison (`crypto.timingSafeEqual`).
-- Aurora connection must handle serverless cold-start reconnection (use `max: 1` connections in edge/serverless context).
+- Aurora connection uses `max: 1, ssl: "require", idle_timeout: 20, max_lifetime: 300` — do not increase `max` in serverless context.
+- Session augments `next-auth` `Session` type (declared in `auth.config.ts`) with `user.id: string` and `user.login?: string` (GitHub handle). Always read `session.user.id` (not `sub`) in server code.

@@ -1,6 +1,5 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { OculsMark } from "@/components/ui/icons"
 import { AuthForm } from "@/components/auth/AuthForm"
 
 export const metadata: Metadata = {
@@ -10,46 +9,33 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <div className="min-h-screen bg-[#000000] flex flex-col items-center justify-center px-4 py-12 relative overflow-hidden">
-
-      {/* Subtle grid overlay */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12 relative bg-[#000000]">
+      
+      <div 
+        className="absolute inset-0 z-0 opacity-15 pointer-events-none" 
+        style={{ 
+          backgroundImage: "url('/hands.jpg')", 
+          backgroundSize: "cover", 
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
         }}
-        aria-hidden="true"
-      />
+      ></div>
 
-      {/* Radial glow */}
-      <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(circle, rgba(255,255,255,0.03) 0%, transparent 70%)",
-        }}
-        aria-hidden="true"
-      />
-
-      {/* Card */}
       <div className="relative z-10 w-full max-w-[400px]">
-        <div className="bg-[#0a0a0a] border border-white/10 rounded-[16px] p-8 flex flex-col items-center gap-7 shadow-[0_0_60px_-20px_rgba(255,255,255,0.06)]">
+        
+        <div className="bg-transparent border-y border-white/10 p-10 flex flex-col items-center gap-7 relative">
 
           {/* Logo */}
           <Link
             href="/"
-            className="flex items-center gap-2.5 hover:opacity-75 transition-opacity"
+            className="flex items-center justify-center hover:opacity-75 transition-opacity mb-2"
             aria-label="Oculs.io home"
           >
-            <OculsMark size={28} className="text-white" />
-            <span
-              className="text-[20px] font-semibold text-white"
-              style={{ letterSpacing: "-0.6px" }}
-            >
-              oculs.io
-            </span>
+            <img 
+              src="/oculs.io.png" 
+              alt="Oculs.io Logo" 
+              className="h-28 w-auto object-contain"
+            />
           </Link>
 
           {/* Headline */}

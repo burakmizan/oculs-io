@@ -15,48 +15,31 @@ export function HowItWorks() {
             <p
               className="text-[11px] font-mono uppercase tracking-[0.08em] text-[#a1a1aa] mb-4"
             >
-              GETTING STARTED
+              WHY DEVELOPERS USE OCULS
             </p>
             <h2
               className="text-[32px] font-semibold leading-[40px] text-white font-sans"
               style={{ letterSpacing: "-1.28px" }}
             >
-              Security in three steps.
+              Building is easy.<br />Staying secure isn't.
             </h2>
-            <p className="mt-4 text-[16px] leading-6 text-[#a1a1aa]">
-              From zero to scanning in under five minutes. No infrastructure
-              to manage, no agents to install.
-            </p>
           </div>
 
-        {/* Steps grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative w-full">
-            {/* Connector line (desktop) - Dark Theme uyumlu ince hat */}
-            <div
-              className="hidden md:block absolute top-[14px] left-[calc(16.67%+16px)] right-[calc(16.67%+16px)] h-px bg-white/10"
-              aria-hidden="true"
-            />
-
-            {STEPS.map((step, i) => (
-              <Step key={step.title} step={i + 1} {...step} />
+          {/* Reasons grid - Seamless technical spec sheet style */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 w-full border-t border-white/10">
+            {REASONS.map((reason, index) => (
+              <ReasonCard key={reason.title} index={index} {...reason} />
             ))}
           </div>
 
-          {/* Bottom CTA - Dark Theme Kontrast Butonları */}
+          {/* Bottom CTA */}
           <div className="mt-16 flex flex-col sm:flex-row items-center justify-center gap-4 w-full">
             <a
-              href="/docs/quickstart"
-              className="inline-flex items-center gap-2 h-10 px-5 text-sm font-medium
-                         text-black bg-white rounded-full hover:bg-[#e5e5e5] transition-colors shadow-card"
+              href="/login"
+              className="inline-flex items-center gap-2 h-10 px-5 text-[13px] font-mono
+                         text-black bg-white hover:bg-[#e5e5e5] transition-colors"
             >
-              Read the quickstart guide →
-            </a>
-            <a
-              href="/docs"
-              className="inline-flex items-center gap-2 h-10 px-5 text-sm font-medium
-                         text-[#a1a1aa] bg-transparent border border-white/10 rounded-full hover:bg-white/5 hover:text-white transition-colors"
-            >
-              Browse documentation
+              Start securing your code →
             </a>
           </div>
           
@@ -66,63 +49,71 @@ export function HowItWorks() {
   );
 }
 
-interface StepProps {
-  step: number;
+interface ReasonProps {
   title: string;
   body: string;
-  code: string;
 }
 
-const STEPS: Omit<StepProps, "step">[] = [
+const REASONS: ReasonProps[] = [
   {
-    title: "Connect your repository.",
-    body: "Add the Oculs GitHub App to your repository and drop a workflow file. One-time setup, under two minutes.",
-    code: "gh app install oculs-io",
+    title: "Ship Faster",
+    body: "Spend less time manually reviewing code and more time building features.",
   },
   {
-    title: "Push your code.",
-    body: "Every push and pull request automatically triggers the full SAST/DAST scan pipeline via GitHub Actions.",
-    code: "git push origin main",
+    title: "Understand Every Risk",
+    body: "Security findings explained in plain English instead of confusing security jargon.",
   },
   {
-    title: "Review and fix with AI.",
-    body: "Open the Oculs dashboard, see triaged findings sorted by severity, and apply the AI-generated patch in one click.",
-    code: "oculs apply-patch scn_01Hx",
+    title: "Fix Issues Faster",
+    body: "Get actionable remediation steps and AI-powered patch suggestions.",
+  },
+  {
+    title: "Built for Modern Stacks",
+    body: "Works with applications built using AI tools, modern frameworks, and rapid development workflows.",
+  },
+  {
+    title: "Reduce Production Surprises",
+    body: "Catch security problems before customers or attackers discover them.",
+  },
+  {
+    title: "Security Without Expertise",
+    body: "No AppSec team required.",
   },
 ];
 
-function Step({ step, title, body, code }: StepProps) {
+function ReasonCard({ title, body, index }: ReasonProps & { index: number }) {
   return (
-    <div className="flex flex-col gap-4 relative border-l border-white/10 pl-6 md:border-l-0 md:pl-0">
-      {/* Step number */}
-      <div className="flex items-center gap-3 mb-2">
-        <div
-          className="flex-shrink-0 w-7 h-7 rounded-full bg-white/10 text-white
-                     flex items-center justify-center font-mono text-[12px]"
-        >
-          {step}
-        </div>
+    <div className="group relative flex flex-col p-8 border-b border-white/10 md:border-r md:[&:nth-child(3n)]:border-r-0 hover:bg-white/[0.02] transition-colors duration-300 overflow-hidden min-h-[220px]">
+      
+      {/* Dev Arka Plan Numarası (Watermark Effect) */}
+      <div className="absolute -bottom-6 -right-2 text-[120px] font-bold text-white/[0.02] group-hover:text-white/[0.04] transition-colors duration-500 leading-none select-none z-0 pointer-events-none font-mono tracking-tighter">
+        {index + 1}
       </div>
-
-      {/* Card */}
-      <div className="bg-white/5 rounded-[8px] p-5 border border-white/10 flex flex-col gap-3 h-full">
-        <h3
-          className="text-[18px] font-semibold leading-7 text-white font-sans"
-          style={{ letterSpacing: "-0.6px" }}
-        >
-          {title}
-        </h3>
-        <p className="text-[14px] leading-5 text-[#a1a1aa]" style={{ letterSpacing: "-0.28px" }}>
-          {body}
-        </p>
-
-        <div
-          className="flex items-center gap-2 bg-[#000000] border border-white/10 rounded-[6px]
-                     px-3 py-2 mt-2"
-        >
-          <span className="text-[#50e3c2] font-mono text-[11px] select-none">$</span>
-          <code className="text-[12px] font-mono text-[#e5e5e5]">{code}</code>
+      
+      {/* İçerik */}
+      <div className="relative z-10 flex flex-col h-full justify-between">
+        <div>
+          {/* Teknik Rozet */}
+          <div className="flex items-center mb-5">
+            <span className="font-mono text-[10px] text-[#a1a1aa] border border-white/10 px-2 py-0.5 rounded-full bg-[#000000]">
+              SEC_0{index + 1}
+            </span>
+          </div>
+          
+          <h3
+            className="text-[18px] font-medium leading-7 text-white font-sans mb-2"
+            style={{ letterSpacing: "-0.5px" }}
+          >
+            {title}
+          </h3>
+          
+          <p className="text-[14px] leading-relaxed text-[#888888]" style={{ letterSpacing: "-0.28px" }}>
+            {body}
+          </p>
         </div>
+        
+        {/* Alt Çizgi Animasyonu */}
+        <div className="w-0 h-[1px] bg-[#a1a1aa] group-hover:w-8 transition-all duration-500 mt-6 opacity-0 group-hover:opacity-100"></div>
       </div>
     </div>
   );

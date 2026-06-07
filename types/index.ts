@@ -8,6 +8,8 @@
 
 export type {
   User,
+  Organization,
+  NewOrganization,
   Project,
   NewProject,
   Scan,

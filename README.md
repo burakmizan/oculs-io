@@ -2,7 +2,7 @@
 
 # Oculs.io
 
-### AI-powered DAST & Security Scanner for Vibe Coders
+### AI-powered DAST & Security Scanner for Modern Developers and Vibe Coders
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org)
@@ -21,7 +21,7 @@
 
 ## What is Oculs.io?
 
-Vibe coders ship fast. Security audits don't keep up. **Oculs.io** closes that gap by plugging a full DAST/SAST pipeline directly into your GitHub workflow — no security team required.
+Modern developers and vibe coders ship fast. Security audits often don't keep up. **Oculs.io** closes that gap by plugging a full DAST/SAST pipeline directly into your GitHub workflow — no dedicated security team required.
 
 You push code. GitHub Actions runs Semgrep, OWASP ZAP, and Gitleaks. The JSON scan results are POSTed to a Next.js webhook endpoint hosted on Vercel. **Google Gemini AI** triages every finding, maps it to CWE/OWASP Top 10, and generates a ready-to-apply unified diff patch. Everything lands in **AWS Aurora PostgreSQL** and surfaces in a clean dashboard — in under 60 seconds.
 
@@ -48,7 +48,7 @@ You push code. GitHub Actions runs Semgrep, OWASP ZAP, and Gitleaks. The JSON sc
 **Stack compliance:**
 - **Frontend & API:** Next.js 15 (App Router) deployed on **Vercel**
 - **Database:** **AWS Aurora PostgreSQL** (Serverless v2) via Drizzle ORM
-- **AI:** Google Gemini 1.5 Pro for vulnerability analysis and auto-fix generation
+- **AI:** Google Gemini 3.5 Flash for vulnerability analysis and auto-fix generation
 - **Zero-backend:** All business logic runs inside Next.js Route Handlers and React Server Components — no separate API server, no Lambda, no containers
 
 The architecture demonstrates that a production-grade B2B security SaaS can be built and operated entirely within the Vercel + AWS database stack without spinning up a single dedicated backend service.
@@ -198,7 +198,7 @@ oculs-ip/
 | Styling | Tailwind CSS |
 | Database | AWS Aurora PostgreSQL (Serverless v2) |
 | ORM | Drizzle ORM |
-| AI | Google Gemini 1.5 Pro |
+| AI | Google Gemini 3.5 Flash |
 | Hosting | Vercel |
 | SAST Engine | Semgrep |
 | DAST Engine | OWASP ZAP |

@@ -14,6 +14,23 @@ export async function signInWithGitHub() {
   await signIn("github", { redirectTo: REDIRECT_TO })
 }
 
+/** Passwordless — sends a Resend magic link; caller shows "check your inbox". */
+export async function signInWithEmail(
+  _prev: AuthActionState,
+  formData: FormData,
+): Promise<AuthActionState> {
+  const email = String(formData.get("email") ?? "").trim()
+  if (!EMAIL_RE.test(email)) return { error: "Enter a valid email address." }
+
+  try {
+    await signIn("resend", { email, redirect: false, redirectTo: REDIRECT_TO })
+    return { ok: true }
+  } catch (error) {
+    if (isRedirectError(error)) throw error
+    return { error: "Could not send magic link. Please try again." }
+  }
+}
+
 /** Email + password sign-in. */
 export async function signInWithCredentials(
   _prev: AuthActionState,

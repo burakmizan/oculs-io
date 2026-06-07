@@ -1,5 +1,6 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
+import Resend from "next-auth/providers/resend"
 import { DrizzleAdapter } from "@auth/drizzle-adapter"
 import { authConfig } from "@/auth.config"
 import { db } from "@/lib/db"
@@ -17,7 +18,8 @@ import { verifyPassword } from "@/lib/auth/password"
  *
  * Extends the edge-safe `authConfig` with:
  *   - the Drizzle adapter, so OAuth users are persisted to Aurora;
- *   - a Credentials provider backed by bcrypt-hashed passwords.
+ *   - a Resend Email provider for passwordless magic-link sign-in;
+ *   - a Credentials provider backed by bcrypt-hashed passwords (demo/judge fallback).
  *
  * Session strategy stays JWT (inherited from authConfig) — mandatory when a
  * Credentials provider is present.
@@ -32,6 +34,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   }),
   providers: [
     ...authConfig.providers,
+    Resend({
+      apiKey: process.env.AUTH_RESEND_KEY,
+      from: process.env.EMAIL_FROM ?? "noreply@oculs.io",
+    }),
     Credentials({
       credentials: {
         email: { label: "Email", type: "email" },

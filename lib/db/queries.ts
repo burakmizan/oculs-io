@@ -2,10 +2,12 @@ import { eq, and, count, desc, inArray } from "drizzle-orm"
 import { db } from "@/lib/db"
 import {
   users,
+  organizations,
   projects,
   scans,
   vulnerabilities,
   type User,
+  type Organization,
 } from "@/lib/db/schema"
 import type { DashboardStats, SeverityLevel, ScanTool } from "@/types"
 
@@ -39,6 +41,75 @@ export async function createCredentialsUser(input: {
     })
     .returning()
   return user
+}
+
+/* ── Onboarding ────────────────────────────────────────────────────── */
+
+export async function hasCompletedOnboarding(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ onboardingCompletedAt: users.onboardingCompletedAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  return row?.onboardingCompletedAt != null
+}
+
+export async function createOrganization(input: {
+  ownerId: string
+  name: string
+  slug: string
+}): Promise<Organization> {
+  const [org] = await db
+    .insert(organizations)
+    .values({
+      ownerId: input.ownerId,
+      name: input.name,
+      slug: input.slug,
+    })
+    .onConflictDoUpdate({
+      target: [organizations.ownerId, organizations.slug],
+      set: { name: input.name },
+    })
+    .returning()
+  return org
+}
+
+export async function createOnboardingProject(input: {
+  userId: string
+  organizationId: string
+  name: string
+  description: string | null
+  repoFullName: string
+  repoUrl: string | null
+}): Promise<string> {
+  const [project] = await db
+    .insert(projects)
+    .values({
+      userId: input.userId,
+      organizationId: input.organizationId,
+      name: input.name,
+      description: input.description,
+      repoFullName: input.repoFullName,
+      repoUrl: input.repoUrl,
+    })
+    .onConflictDoUpdate({
+      target: [projects.userId, projects.repoFullName],
+      set: {
+        name: input.name,
+        description: input.description,
+        organizationId: input.organizationId,
+        updatedAt: new Date(),
+      },
+    })
+    .returning({ id: projects.id })
+  return project.id
+}
+
+export async function markOnboardingComplete(userId: string): Promise<void> {
+  await db
+    .update(users)
+    .set({ onboardingCompletedAt: new Date() })
+    .where(eq(users.id, userId))
 }
 
 /* ── Dashboard ─────────────────────────────────────────────────────── */

@@ -36,9 +36,13 @@ export const authConfig = {
     authorized({ auth: session, request: { nextUrl } }) {
       const isLoggedIn = !!session?.user
       const isOnDashboard = nextUrl.pathname.startsWith("/dashboard")
+      const isOnOnboarding = nextUrl.pathname === "/onboarding"
 
-      if (isOnDashboard) return isLoggedIn
+      // Both dashboard and onboarding require authentication.
+      if (isOnDashboard || isOnOnboarding) return isLoggedIn
 
+      // Redirect logged-in users away from login; whether they go to
+      // /onboarding or /dashboard is decided by the dashboard layout (DB query).
       if (isLoggedIn && nextUrl.pathname === "/login") {
         return Response.redirect(new URL("/dashboard", nextUrl))
       }

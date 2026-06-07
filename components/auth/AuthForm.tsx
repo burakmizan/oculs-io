@@ -4,7 +4,7 @@ import { useActionState, useState } from "react"
 import { GitHub } from "@/components/ui/icons"
 import {
   signInWithCredentials,
-  registerAccount,
+  signInWithEmail,
   signInWithGitHub,
 } from "@/app/login/actions"
 import type { AuthActionState } from "@/types"
@@ -24,10 +24,7 @@ export function AuthForm() {
         role="tablist"
         aria-label="Authentication mode"
       >
-        <SegButton
-          active={mode === "signin"}
-          onClick={() => setMode("signin")}
-        >
+        <SegButton active={mode === "signin"} onClick={() => setMode("signin")}>
           Sign in
         </SegButton>
         <SegButton
@@ -38,102 +35,204 @@ export function AuthForm() {
         </SegButton>
       </div>
 
-      {mode === "signin" ? <SignInForm /> : <RegisterForm />}
-
-      {/* Divider */}
-      <div className="flex items-center gap-3" aria-hidden="true">
-        <div className="flex-1 h-px bg-white/10" />
-        <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-[#444444]">
-          or
-        </span>
-        <div className="flex-1 h-px bg-white/10" />
-      </div>
-
-      {/* GitHub OAuth */}
-      <form action={signInWithGitHub} className="w-full">
-        <button
-          type="submit"
-          className="w-full inline-flex items-center justify-center gap-3 h-11 px-5
-                     text-[14px] font-medium text-white bg-white/[0.04]
-                     border border-white/10 rounded-[8px]
-                     hover:bg-white/[0.08] active:bg-white/[0.06]
-                     transition-colors
-                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-          style={{ letterSpacing: "-0.28px" }}
-        >
-          <GitHub size={16} />
-          Continue with GitHub
-        </button>
-      </form>
+      {mode === "signin" ? <SignInView /> : <RegisterView />}
     </div>
   )
 }
 
-function SignInForm() {
+/* ── Sign In View ─────────────────────────────────────────────────── */
+
+function SignInView() {
+  const [isPasswordMode, setIsPasswordMode] = useState(false)
+
+  if (isPasswordMode) {
+    return <CredentialsSignInForm onBack={() => setIsPasswordMode(false)} />
+  }
+  return <MagicLinkSignInForm onPasswordMode={() => setIsPasswordMode(true)} />
+}
+
+function MagicLinkSignInForm({
+  onPasswordMode,
+}: {
+  onPasswordMode: () => void
+}) {
+  const [state, action, pending] = useActionState(signInWithEmail, INITIAL)
+
+  if (state.ok) return <CheckInboxMessage />
+
+  return (
+    <div className="flex flex-col gap-4">
+      <GitHubButton />
+      <Divider />
+      <form action={action} className="flex flex-col gap-3">
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          required
+        />
+        <ErrorLine message={state.error} />
+        <SubmitButton pending={pending}>Send Magic Link</SubmitButton>
+      </form>
+      <button
+        type="button"
+        onClick={onPasswordMode}
+        className="self-center text-[12px] font-mono text-[#444444] hover:text-[#a1a1aa] transition-colors"
+        style={{ letterSpacing: "-0.24px" }}
+      >
+        Continue with password →
+      </button>
+    </div>
+  )
+}
+
+function CredentialsSignInForm({ onBack }: { onBack: () => void }) {
   const [state, action, pending] = useActionState(
     signInWithCredentials,
     INITIAL,
   )
+
   return (
-    <form action={action} className="flex flex-col gap-3">
-      <Field
-        label="Email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        placeholder="you@company.com"
-        required
-      />
-      <Field
-        label="Password"
-        name="password"
-        type="password"
-        autoComplete="current-password"
-        placeholder="••••••••"
-        required
-      />
-      <ErrorLine message={state.error} />
-      <SubmitButton pending={pending}>Sign in</SubmitButton>
+    <div className="flex flex-col gap-4">
+      <GitHubButton />
+      <Divider />
+      <form action={action} className="flex flex-col gap-3">
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          required
+        />
+        <Field
+          label="Password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="••••••••"
+          required
+        />
+        <ErrorLine message={state.error} />
+        <SubmitButton pending={pending}>Sign in</SubmitButton>
+      </form>
+      <button
+        type="button"
+        onClick={onBack}
+        className="self-center text-[12px] font-mono text-[#444444] hover:text-[#a1a1aa] transition-colors"
+        style={{ letterSpacing: "-0.24px" }}
+      >
+        ← Use magic link instead
+      </button>
+    </div>
+  )
+}
+
+/* ── Register View ────────────────────────────────────────────────── */
+
+function RegisterView() {
+  const [isEmailMode, setIsEmailMode] = useState(false)
+  const [state, action, pending] = useActionState(signInWithEmail, INITIAL)
+
+  if (state.ok) return <CheckInboxMessage />
+
+  return (
+    <div className="flex flex-col gap-4">
+      <GitHubButton />
+      <Divider />
+      {!isEmailMode ? (
+        <button
+          type="button"
+          onClick={() => setIsEmailMode(true)}
+          className="w-full inline-flex items-center justify-center h-11 px-5
+                     text-[14px] font-medium text-[#a1a1aa]
+                     border border-white/10 rounded-[8px]
+                     hover:bg-white/[0.04] hover:text-white
+                     transition-colors
+                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          style={{ letterSpacing: "-0.28px" }}
+        >
+          Continue with Email →
+        </button>
+      ) : (
+        <form action={action} className="flex flex-col gap-3">
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@company.com"
+            required
+          />
+          <ErrorLine message={state.error} />
+          <SubmitButton pending={pending}>Send Magic Link</SubmitButton>
+        </form>
+      )}
+    </div>
+  )
+}
+
+/* ── Shared sub-components ────────────────────────────────────────── */
+
+function CheckInboxMessage() {
+  return (
+    <div className="flex flex-col items-center gap-3 py-6 text-center">
+      <div
+        className="w-9 h-9 rounded-full bg-white/[0.05] border border-white/10
+                      flex items-center justify-center text-[16px]"
+      >
+        ✉
+      </div>
+      <p
+        className="text-[14px] font-medium text-white"
+        style={{ letterSpacing: "-0.28px" }}
+      >
+        Check your inbox
+      </p>
+      <p className="text-[12px] font-mono text-[#666666] leading-5">
+        We sent a magic link to your email.
+        <br />
+        Click it to sign in instantly.
+      </p>
+    </div>
+  )
+}
+
+function GitHubButton() {
+  return (
+    <form action={signInWithGitHub} className="w-full">
+      <button
+        type="submit"
+        className="w-full inline-flex items-center justify-center gap-3 h-11 px-5
+                   text-[14px] font-medium text-white bg-white/[0.04]
+                   border border-white/10 rounded-[8px]
+                   hover:bg-white/[0.08] active:bg-white/[0.06]
+                   transition-colors
+                   focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+        style={{ letterSpacing: "-0.28px" }}
+      >
+        <GitHub size={16} />
+        Continue with GitHub
+      </button>
     </form>
   )
 }
 
-function RegisterForm() {
-  const [state, action, pending] = useActionState(registerAccount, INITIAL)
+function Divider() {
   return (
-    <form action={action} className="flex flex-col gap-3">
-      <Field
-        label="Name"
-        name="name"
-        type="text"
-        autoComplete="name"
-        placeholder="Ada Lovelace"
-        required
-      />
-      <Field
-        label="Email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        placeholder="you@company.com"
-        required
-      />
-      <Field
-        label="Password"
-        name="password"
-        type="password"
-        autoComplete="new-password"
-        placeholder="At least 8 characters"
-        minLength={8}
-        required
-      />
-      <ErrorLine message={state.error} />
-      <SubmitButton pending={pending}>Create account</SubmitButton>
-    </form>
+    <div className="flex items-center gap-3" aria-hidden="true">
+      <div className="flex-1 h-px bg-white/10" />
+      <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-[#444444]">
+        or
+      </span>
+      <div className="flex-1 h-px bg-white/10" />
+    </div>
   )
 }
 
-/* ── Primitives ─────────────────────────────────────────────────────── */
+/* ── Primitives ───────────────────────────────────────────────────── */
 
 function SegButton({
   active,

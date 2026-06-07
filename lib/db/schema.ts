@@ -108,6 +108,8 @@ export const users = pgTable("users", {
   image: text("image"),
   /** bcrypt hash — only set for Credentials accounts. */
   passwordHash: text("password_hash"),
+  /** Set when the user completes the onboarding wizard; null = not onboarded. */
+  onboardingCompletedAt: timestamp("onboarding_completed_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 })
 
@@ -159,6 +161,28 @@ export const verificationTokens = pgTable(
  *  Application tables
  * ════════════════════════════════════════════════════════════════════ */
 
+/**
+ * Multi-tenant workspace record. Each user owns exactly one organization;
+ * all projects are scoped to it so row-level isolation is enforced by both
+ * `userId` and `organizationId`.
+ */
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerSlugUnique: uniqueIndex("orgs_owner_slug_unique").on(t.ownerId, t.slug),
+    ownerIdx: index("orgs_owner_idx").on(t.ownerId),
+  }),
+)
+
 /** A connected repository (and optional deployed target for DAST). */
 export const projects = pgTable(
   "projects",
@@ -167,7 +191,13 @@ export const projects = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** Tenant scope — set for all projects created after onboarding. */
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
     name: text("name").notNull(),
+    description: text("description"),
     /** `owner/repo` slug for the source repository. */
     repoFullName: text("repo_full_name").notNull(),
     repoUrl: text("repo_url"),
@@ -299,9 +329,15 @@ export const vulnerabilities = pgTable(
 
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
+  organizations: many(organizations),
   projects: many(projects),
   scans: many(scans),
   vulnerabilities: many(vulnerabilities),
+}))
+
+export const organizationsRelations = relations(organizations, ({ one, many }) => ({
+  owner: one(users, { fields: [organizations.ownerId], references: [users.id] }),
+  projects: many(projects),
 }))
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -310,6 +346,10 @@ export const accountsRelations = relations(accounts, ({ one }) => ({
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   user: one(users, { fields: [projects.userId], references: [users.id] }),
+  organization: one(organizations, {
+    fields: [projects.organizationId],
+    references: [organizations.id],
+  }),
   scans: many(scans),
   vulnerabilities: many(vulnerabilities),
 }))
@@ -346,6 +386,8 @@ export const vulnerabilitiesRelations = relations(
  * ════════════════════════════════════════════════════════════════════ */
 
 export type User = typeof users.$inferSelect
+export type Organization = typeof organizations.$inferSelect
+export type NewOrganization = typeof organizations.$inferInsert
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
 export type Scan = typeof scans.$inferSelect

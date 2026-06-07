@@ -21,9 +21,6 @@ export function Hero() {
       <div className="relative z-10 mx-auto max-w-[1200px] px-4 sm:px-6 pt-8 pb-0 flex flex-col items-center">
         
         <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 mb-8 z-20">
-          <span className="inline-flex items-center px-3 py-1 rounded-full bg-[#3f0f0f] text-[#ef4444] text-[13px] font-medium tracking-wide border border-[#7f1d1d]/50">
-            NEW
-          </span>
           <span className="text-[14px] sm:text-[15px] text-white font-medium">
             AI auto-fix patches now in beta
           </span>
@@ -47,14 +44,14 @@ export function Hero() {
             className="text-[48px] font-semibold leading-[48px] text-white mb-6 font-sans"
             style={{ letterSpacing: "-2.4px" }}
           >
-            Secure your code<br />before it ships.
+            Built with AI? Scan it first.
           </h1>
 
           {/* Lead body */}
           <p
             className="text-[18px] font-normal leading-7 text-[#a1a1aa] max-w-[560px] mb-10"
           >
-            Oculs.io performs AI-powered DAST and SAST scans. It offers real-time prioritization, CWE matching, and automated remediation patches.
+            Find security vulnerabilities before hackers do. Scan your app, understand the risks, and get AI-powered fixes in minutes.
           </p>
 
           {/* CTA row */}
