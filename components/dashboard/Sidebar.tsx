@@ -2,13 +2,13 @@ import Link from "next/link"
 import Image from "next/image"
 import { signOut } from "@/auth"
 import {
-  OculsMark,
   LayoutGrid,
   ScanIcon,
   AlertTriangle,
-  Cog,
+  Settings,
   LogOut,
-} from "@/components/ui/icons"
+  GitBranch,
+} from "lucide-react"
 
 interface SidebarUser {
   name?: string | null
@@ -18,10 +18,11 @@ interface SidebarUser {
 }
 
 const NAV_ITEMS = [
-  { label: "Overview",  href: "/dashboard",          icon: LayoutGrid    },
-  { label: "Scans",     href: "/dashboard/scans",    icon: ScanIcon      },
-  { label: "Findings",  href: "/dashboard/findings", icon: AlertTriangle },
-  { label: "Settings",  href: "/dashboard/settings", icon: Cog           },
+  { label: "Overview",  href: "/dashboard",           icon: LayoutGrid    },
+  { label: "Projects",  href: "/dashboard/projects",  icon: GitBranch     },
+  { label: "Scans",     href: "/dashboard/scans",     icon: ScanIcon      },
+  { label: "Findings",  href: "/dashboard/findings",  icon: AlertTriangle },
+  { label: "Settings",  href: "/dashboard/settings",  icon: Settings      },
 ] as const
 
 export function Sidebar({ user }: { user: SidebarUser }) {
@@ -37,17 +38,20 @@ export function Sidebar({ user }: { user: SidebarUser }) {
     <aside className="w-[220px] flex-shrink-0 flex flex-col bg-[#000000] border-r border-white/10 h-full">
 
       {/* Brand */}
-      <div className="h-16 flex items-center px-5 border-b border-white/10 flex-shrink-0">
+      <div className="h-16 flex items-center px-6 border-b border-white/10 flex-shrink-0 bg-[#050505]">
         <Link
           href="/dashboard"
-          className="flex items-center gap-2.5 hover:opacity-75 transition-opacity"
+          className="flex items-center gap-3 hover:opacity-75 transition-opacity"
           aria-label="Dashboard home"
         >
-          <OculsMark size={18} className="text-white" />
-          <span
-            className="text-[14px] font-semibold text-white"
-            style={{ letterSpacing: "-0.36px" }}
-          >
+          <img 
+            src="/oculs.io.png" 
+            alt="Oculs Logo" 
+            className="h-15 w-auto"
+            style={{ filter: "brightness(0) invert(1)" }} 
+          />
+          {/* Pixel Art / Terminal Font */}
+          <span className="text-white font-mono text-[14px] font-bold tracking-tight mt-0.5 select-none">
             oculs.io
           </span>
         </Link>
@@ -55,7 +59,7 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
       {/* Navigation */}
       <nav
-        className="flex-1 p-3 flex flex-col gap-0.5 overflow-y-auto"
+        className="flex-1 p-4 flex flex-col gap-1.5 overflow-y-auto"
         aria-label="Dashboard navigation"
       >
         {NAV_ITEMS.map((item) => {
@@ -64,13 +68,15 @@ export function Sidebar({ user }: { user: SidebarUser }) {
             <Link
               key={item.label}
               href={item.href}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-[6px]
-                         text-[13px] text-[#a1a1aa]
-                         hover:text-white hover:bg-white/5
-                         transition-colors"
-              style={{ letterSpacing: "-0.26px" }}
+              className="group flex items-center gap-3 px-3 py-2.5 rounded-[8px]
+                         text-[14px] font-medium text-[#888888]
+                         hover:text-white hover:bg-white/[0.04] border border-transparent hover:border-white/5
+                         transition-all duration-200"
+              style={{ letterSpacing: "-0.3px" }}
             >
-              <Icon size={14} />
+              <div className="text-[#555555] group-hover:text-white transition-colors duration-200">
+                <Icon size={18} />
+              </div>
               {item.label}
             </Link>
           )
@@ -78,20 +84,20 @@ export function Sidebar({ user }: { user: SidebarUser }) {
       </nav>
 
       {/* User section */}
-      <div className="p-3 border-t border-white/10 flex-shrink-0">
-        <div className="flex items-center gap-2.5 px-3 py-2 mb-0.5">
+      <div className="p-4 border-t border-white/10 flex-shrink-0 bg-[#050505]">
+        <div className="flex items-center gap-3 px-3 py-2.5 mb-2 bg-[#000000] rounded-[8px] border border-white/5">
           {user.image ? (
             <Image
               src={user.image}
               alt={displayName}
-              width={24}
-              height={24}
-              className="rounded-full flex-shrink-0"
+              width={32}
+              height={32}
+              className="rounded-[6px] flex-shrink-0 border border-white/10"
             />
           ) : (
             <div
-              className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center
-                         text-white text-[10px] font-medium flex-shrink-0"
+              className="w-8 h-8 rounded-[6px] bg-white/10 border border-white/10 flex items-center justify-center
+                         text-white text-[12px] font-mono font-medium flex-shrink-0"
               aria-hidden="true"
             >
               {initial}
@@ -99,13 +105,13 @@ export function Sidebar({ user }: { user: SidebarUser }) {
           )}
           <div className="flex-1 min-w-0">
             <p
-              className="text-[12px] font-medium text-white truncate"
-              style={{ letterSpacing: "-0.24px" }}
+              className="text-[13px] font-semibold text-white truncate"
+              style={{ letterSpacing: "-0.26px" }}
             >
               {displayName}
             </p>
             {user.email && (
-              <p className="text-[11px] text-[#555555] truncate font-mono">
+              <p className="text-[11px] text-[#888888] truncate font-mono mt-0.5">
                 {user.email}
               </p>
             )}
@@ -115,13 +121,15 @@ export function Sidebar({ user }: { user: SidebarUser }) {
         <form action={handleSignOut}>
           <button
             type="submit"
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[6px]
-                       text-[13px] text-[#555555]
-                       hover:text-[#a1a1aa] hover:bg-white/5
-                       transition-colors"
+            className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-[8px]
+                       text-[13px] font-medium text-[#888888]
+                       hover:text-[#ef4444] hover:bg-red-500/10 border border-transparent hover:border-red-500/20
+                       transition-all duration-200"
             style={{ letterSpacing: "-0.26px" }}
           >
-            <LogOut size={14} />
+            <div className="text-[#555555] group-hover:text-[#ef4444] transition-colors duration-200">
+              <LogOut size={16} />
+            </div>
             Sign out
           </button>
         </form>

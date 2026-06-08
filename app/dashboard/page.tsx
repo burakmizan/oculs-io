@@ -65,19 +65,11 @@ export default async function DashboardPage() {
   return (
     <div className="p-8 max-w-[1100px] mx-auto">
 
-      {/* Header */}
-      <div className="mb-8 pb-6 border-b border-white/10 flex items-start justify-between">
-        <div>
-          <p className="text-[11px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-1.5">
-            DASHBOARD
-          </p>
-          <h1 className="text-[26px] font-semibold text-white" style={{ letterSpacing: "-1.04px" }}>
-            Overview
-          </h1>
-          <p className="text-[14px] text-[#666666] mt-1" style={{ letterSpacing: "-0.28px" }}>
-            Welcome back, {firstName}.
-          </p>
-        </div>
+      {/* Welcome + action row */}
+      <div className="mb-8 flex items-center justify-between">
+        <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
+          Welcome back, {firstName}.
+        </p>
         <Link
           href="/dashboard/scans"
           className="flex items-center gap-2 h-9 px-4 rounded-[8px] bg-white text-[#000] text-[13px] font-medium hover:bg-white/90 transition-colors"
@@ -214,12 +206,14 @@ export default async function DashboardPage() {
               </div>
             )}
 
-            <Link
-              href="/dashboard/settings"
-              className="text-[11px] font-mono text-[#444444] hover:text-[#a1a1aa] transition-colors"
-            >
-              Manage plan →
-            </Link>
+            <div className="flex items-center justify-between mt-1">
+              <Link
+                href="/dashboard/settings"
+                className="text-[11px] font-mono text-[#555555] hover:text-white transition-colors"
+              >
+                Manage plan →
+              </Link>
+            </div>
           </div>
         </div>
       </div>

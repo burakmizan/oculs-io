@@ -3,6 +3,7 @@ import { redirect } from "next/navigation"
 import { auth } from "@/auth"
 import { hasCompletedOnboarding } from "@/lib/db/queries"
 import { Sidebar } from "@/components/dashboard/Sidebar"
+import { TopBar } from "@/components/dashboard/TopBar"
 
 export const metadata: Metadata = {
   title: {
@@ -34,9 +35,12 @@ export default async function DashboardLayout({
   return (
     <div className="flex h-screen bg-[#000000] overflow-hidden">
       <Sidebar user={session.user} />
-      <main className="flex-1 overflow-auto bg-[#000000]">
-        {children}
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <TopBar />
+        <main className="flex-1 overflow-auto bg-[#000000]">
+          {children}
+        </main>
+      </div>
     </div>
   )
 }

@@ -9,13 +9,10 @@ export default async function SettingsPage() {
 
   return (
     <div className="p-8 max-w-[720px] mx-auto">
-      <div className="mb-8 pb-6 border-b border-white/10">
-        <p className="text-[11px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-1.5">
-          SETTINGS
+      <div className="mb-6">
+        <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
+          Manage your account, integrations, and billing.
         </p>
-        <h1 className="text-[26px] font-semibold text-white" style={{ letterSpacing: "-1.04px" }}>
-          Settings
-        </h1>
       </div>
 
       {/* Profile */}

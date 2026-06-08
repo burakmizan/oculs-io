@@ -47,6 +47,18 @@ export async function createScan(
       tools,
     })
     revalidatePath("/dashboard")
+
+    // Fire-and-forget: trigger GitHub Actions workflow.
+    // Failure here is non-fatal — scan row is already in Aurora.
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://oculs-io.vercel.app"
+      await fetch(`${appUrl}/api/scan/trigger`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: "" },
+        body: JSON.stringify({ scanId }),
+      })
+    } catch { /* Non-fatal — scan queued, workflow can be triggered manually */ }
+
     return { ok: true, scanId }
   } catch {
     // Most likely Aurora is not provisioned/reachable in local dev.

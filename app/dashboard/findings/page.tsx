@@ -5,14 +5,8 @@ export const metadata: Metadata = { title: "Findings" }
 export default function FindingsPage() {
   return (
     <div className="p-8 max-w-[1100px] mx-auto">
-      <div className="mb-8 pb-6 border-b border-white/10">
-        <p className="text-[11px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-1.5">
-          FINDINGS
-        </p>
-        <h1 className="text-[26px] font-semibold text-white" style={{ letterSpacing: "-1.04px" }}>
-          Findings
-        </h1>
-        <p className="text-[14px] text-[#666666] mt-1" style={{ letterSpacing: "-0.28px" }}>
+      <div className="mb-6">
+        <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
           All vulnerabilities detected across your repositories.
         </p>
       </div>

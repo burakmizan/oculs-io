@@ -11,6 +11,7 @@ import {
 } from "@/lib/tools"
 import type { ScanTool } from "@/types"
 import { ScanIcon, Check, GitBranch, Sparkles } from "@/components/ui/icons"
+import { ScanProgress } from "@/components/dashboard/ScanProgress"
 
 const INITIAL: ScanActionState = {}
 
@@ -34,6 +35,7 @@ export function ScanLauncher({ projects }: { projects: ProjectOption[] }) {
   const [repoSearch, setRepoSearch] = useState("")
   const [manualRepo, setManualRepo] = useState("")
   const [repoAllSelected, setRepoAllSelected] = useState(false)
+  const [showProgress, setShowProgress] = useState(false)
 
   const [githubRepos, setGithubRepos] = useState<{ fullName: string; private: boolean; language: string | null }[]>([])
   const [reposLoading, setReposLoading] = useState(false)
@@ -66,9 +68,25 @@ export function ScanLauncher({ projects }: { projects: ProjectOption[] }) {
 
   const allIds = useMemo(() => TOOLS.map((t) => t.id), [])
 
+  // Open progress popup when scan is queued successfully
+  useEffect(() => {
+    if (state.ok && state.scanId) {
+      setShowProgress(true)
+    }
+  }, [state.ok, state.scanId])
+
   return (
-    <form
-      action={action}
+    <>
+      {showProgress && state.scanId && (
+        <ScanProgress
+          scanId={state.scanId}
+          repoName={selectedRepo || "repository"}
+          toolCount={selected.size}
+          onClose={() => setShowProgress(false)}
+        />
+      )}
+      <form
+        action={action}
       className="bg-white/[0.02] border border-white/10 rounded-[14px] overflow-hidden"
     >
       {/* Header */}
@@ -521,5 +539,6 @@ export function ScanLauncher({ projects }: { projects: ProjectOption[] }) {
         </button>
       </div>
     </form>
+    </>
   )
 }

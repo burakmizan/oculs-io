@@ -1,7 +1,9 @@
 import type { Metadata } from "next"
+import Link from "next/link"
 import { auth } from "@/auth"
 import { getUserProjects } from "@/lib/db/queries"
 import { ScanLauncher } from "@/components/dashboard/ScanLauncher"
+import type { ProjectOption } from "@/lib/db/queries"
 
 export const metadata: Metadata = { title: "Scans" }
 
@@ -10,7 +12,7 @@ export default async function ScansPage() {
   const userId = session!.user.id
   const isGitHubUser = !!session?.user?.login
 
-  let projects: any[] = []
+  let projects: ProjectOption[] = []
   try {
     projects = await getUserProjects(userId)
   } catch { /* Aurora offline */ }
@@ -20,20 +22,13 @@ export default async function ScansPage() {
   return (
     <div className="p-8 max-w-[900px] mx-auto">
 
-      {/* Header */}
-      <div className="mb-8 pb-6 border-b border-white/10">
-        <p className="text-[11px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-1.5">
-          SCANS
-        </p>
-        <h1 className="text-[26px] font-semibold text-white" style={{ letterSpacing: "-1.04px" }}>
-          Security Scans
-        </h1>
-        <p className="text-[14px] text-[#666666] mt-1" style={{ letterSpacing: "-0.28px" }}>
+      <div className="mb-6">
+        <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
           Orchestrate up to 20 SAST, DAST, and secrets scanners on any repository.
         </p>
       </div>
 
-      {/* GitHub connect banner — only for non-GitHub users */}
+      {/* GitHub connect banner */}
       {!isGitHubUser && (
         <div className="mb-6 flex items-center gap-4 px-5 py-4 rounded-[10px] border border-white/10 bg-white/[0.02]">
           <div className="w-9 h-9 rounded-[8px] bg-white/[0.05] border border-white/10 flex items-center justify-center flex-shrink-0">
@@ -51,7 +46,8 @@ export default async function ScansPage() {
           </div>
           <a
             href="/api/connect/github"
-            className="flex items-center gap-2 h-9 px-4 rounded-[8px] border border-white/15 text-[13px] text-white hover:bg-white/5 transition-colors flex-shrink-0"
+            className="flex items-center gap-2 h-9 px-4 rounded-[8px] border border-white/15
+                       text-[13px] text-white hover:bg-white/5 transition-colors flex-shrink-0"
             style={{ letterSpacing: "-0.26px" }}
           >
             Connect GitHub →
@@ -59,23 +55,30 @@ export default async function ScansPage() {
         </div>
       )}
 
-      {/* Empty state — no projects */}
+      {/* No projects — prompt to create */}
       {!hasProjects ? (
-        <div className="flex flex-col items-center justify-center py-24 text-center gap-4 border border-white/10 rounded-[12px] bg-white/[0.01]">
-          <div className="w-12 h-12 rounded-full bg-white/[0.04] border border-white/10 flex items-center justify-center text-[20px]">
+        <div className="flex flex-col items-center justify-center py-28 text-center gap-4
+                        border border-white/10 rounded-[16px] bg-white/[0.01]">
+          <div className="w-12 h-12 rounded-full bg-white/[0.04] border border-white/10
+                          flex items-center justify-center text-[20px]">
             ⬡
           </div>
           <div>
             <p className="text-[16px] font-semibold text-white mb-1" style={{ letterSpacing: "-0.48px" }}>
-              Create your first project
+              No projects yet
             </p>
-            <p className="text-[13px] text-[#555555] max-w-[340px]">
-              Enter a repository below to set up your first security project and run your first scan.
+            <p className="text-[13px] text-[#555555] max-w-[320px]">
+              Create a project first to connect a repository, then run your first scan.
             </p>
           </div>
-          <div className="w-full max-w-[600px] mt-4">
-            <ScanLauncher projects={[]} />
-          </div>
+          <Link
+            href="/dashboard/projects/new"
+            className="mt-2 flex items-center gap-2 h-9 px-4 rounded-[8px] bg-white text-black
+                       text-[13px] font-medium hover:bg-white/90 transition-colors"
+            style={{ letterSpacing: "-0.26px" }}
+          >
+            Create First Project
+          </Link>
         </div>
       ) : (
         <ScanLauncher projects={projects} />
