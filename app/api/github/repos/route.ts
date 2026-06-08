@@ -1,0 +1,50 @@
+import { NextResponse } from "next/server"
+import { auth } from "@/auth"
+
+/**
+ * GET /api/github/repos
+ * Returns the authenticated user's GitHub repositories.
+ * Requires GitHub OAuth with `repo` scope.
+ */
+export async function GET() {
+  const session = await auth()
+
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const token = session.user.githubAccessToken
+  if (!token) {
+    return NextResponse.json({ error: "No GitHub token — connect GitHub first" }, { status: 403 })
+  }
+
+  try {
+    const res = await fetch(
+      "https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        next: { revalidate: 60 }, // Cache for 60 seconds
+      },
+    )
+
+    if (!res.ok) {
+      return NextResponse.json({ error: "GitHub API error" }, { status: res.status })
+    }
+
+    const data = await res.json()
+    const repos = data.map((r: { full_name: string; private: boolean; updated_at: string; language: string | null }) => ({
+      fullName: r.full_name,
+      private: r.private,
+      updatedAt: r.updated_at,
+      language: r.language,
+    }))
+
+    return NextResponse.json({ repos })
+  } catch {
+    return NextResponse.json({ error: "Failed to fetch repositories" }, { status: 500 })
+  }
+}

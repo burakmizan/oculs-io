@@ -66,4 +66,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
     }),
   ],
+  callbacks: {
+    jwt({ token, profile, account }) {
+      const login = (profile as { login?: string } | undefined)?.login
+      if (login) token.login = login
+      if (account?.access_token) token.githubAccessToken = account.access_token
+      return token
+    },
+    session({ session, token }) {
+      if (token.sub) session.user.id = token.sub
+      if (token.login) session.user.login = token.login as string
+      if (token.githubAccessToken) session.user.githubAccessToken = token.githubAccessToken as string
+      return session
+    }
+  }
 })

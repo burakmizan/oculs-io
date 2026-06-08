@@ -1,6 +1,6 @@
 "use client"
 
-import { useActionState, useMemo, useState } from "react"
+import { useActionState, useEffect, useMemo, useState } from "react"
 import { createScan, type ScanActionState } from "@/app/dashboard/actions"
 import type { ProjectOption } from "@/lib/db/queries"
 import {
@@ -28,6 +28,26 @@ export function ScanLauncher({ projects }: { projects: ProjectOption[] }) {
   const [selected, setSelected] = useState<Set<ScanTool>>(
     () => new Set(DEFAULT_SELECTED),
   )
+
+  const [selectedRepo, setSelectedRepo] = useState<string>("")
+  const [repoModalOpen, setRepoModalOpen] = useState(false)
+  const [repoSearch, setRepoSearch] = useState("")
+  const [manualRepo, setManualRepo] = useState("")
+  const [repoAllSelected, setRepoAllSelected] = useState(false)
+
+  const [githubRepos, setGithubRepos] = useState<{ fullName: string; private: boolean; language: string | null }[]>([])
+  const [reposLoading, setReposLoading] = useState(false)
+
+  // Fetch GitHub repos when modal opens
+  useEffect(() => {
+    if (!repoModalOpen || githubRepos.length > 0) return
+    setReposLoading(true)
+    fetch("/api/github/repos")
+      .then((r) => r.json())
+      .then((d) => { if (d.repos) setGithubRepos(d.repos) })
+      .catch(() => {})
+      .finally(() => setReposLoading(false))
+  }, [repoModalOpen])
 
   const toggle = (id: ScanTool) =>
     setSelected((prev) => {
@@ -78,34 +98,275 @@ export function ScanLauncher({ projects }: { projects: ProjectOption[] }) {
         </div>
       </div>
 
-      {/* Target inputs */}
-      <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-3 border-b border-white/10">
-        <label className="flex flex-col gap-1.5">
+      {/* Repository picker + modal */}
+      <div className="px-6 py-5 flex flex-col gap-4 border-b border-white/10">
+        <div className="flex flex-col gap-2">
           <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666] flex items-center gap-1.5">
             <GitBranch size={11} /> Repository
           </span>
-          <input
-            name="repoFullName"
-            list="oculs-projects"
-            placeholder="owner/repo"
-            required
-            className="h-10 px-3 rounded-[8px] bg-white/[0.02] border border-white/10
-                       text-[14px] text-white placeholder:text-[#444444] font-mono
-                       focus:border-white/25 focus:bg-white/[0.04]
-                       focus-visible:outline-none transition-colors"
-            style={{ letterSpacing: "-0.14px" }}
-          />
-          <datalist id="oculs-projects">
-            {projects.map((p) => (
-              <option key={p.id} value={p.repoFullName} />
-            ))}
-          </datalist>
-        </label>
 
+          {/* Hidden form field */}
+          <input type="hidden" name="repoFullName" value={selectedRepo} />
+
+          {/* Trigger button */}
+          <button
+            type="button"
+            onClick={() => setRepoModalOpen(true)}
+            className={`flex items-center justify-between h-10 px-3 rounded-[8px] border text-left transition-colors
+              ${selectedRepo
+                ? "border-white/25 bg-white/[0.04] text-white"
+                : "border-white/10 bg-white/[0.02] text-[#444444]"
+              }`}
+          >
+            <span className="text-[13px] font-mono truncate" style={{ letterSpacing: "-0.14px" }}>
+              {selectedRepo || "Select repository…"}
+            </span>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0 ml-2 text-[#555555]">
+              <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+
+          {/* Modal overlay */}
+          {repoModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              {/* Backdrop */}
+              <div
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                onClick={() => setRepoModalOpen(false)}
+              />
+
+              {/* Modal */}
+              <div className="relative z-10 w-full max-w-[480px] bg-[#0a0a0a] border border-white/15 rounded-[16px] overflow-hidden shadow-2xl">
+
+                {/* Modal header */}
+                <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+                  <div>
+                    <p className="text-[14px] font-semibold text-white" style={{ letterSpacing: "-0.28px" }}>
+                      Select Repository
+                    </p>
+                    <p className="text-[12px] text-[#555555] mt-0.5">
+                      Choose a repository to scan
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRepoModalOpen(false)}
+                    className="w-7 h-7 rounded-[6px] flex items-center justify-center text-[#555555] hover:text-white hover:bg-white/10 transition-colors"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Search */}
+                <div className="px-4 py-3 border-b border-white/[0.07]">
+                  <input
+                    type="text"
+                    placeholder="Search repositories…"
+                    value={repoSearch}
+                    onChange={(e) => setRepoSearch(e.target.value)}
+                    className="w-full h-8 px-3 rounded-[6px] bg-white/[0.04] border border-white/10
+                               text-[13px] text-white placeholder:text-[#444444] font-mono
+                               focus:border-white/20 focus-visible:outline-none transition-colors"
+                    style={{ letterSpacing: "-0.14px" }}
+                  />
+                </div>
+
+                {/* Repo list */}
+                <div className="max-h-[320px] overflow-y-auto">
+                  {/* Manual entry */}
+                  <div className="px-4 py-2 border-b border-white/[0.05]">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-2">
+                      Enter manually
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="owner/repo"
+                        value={manualRepo}
+                        onChange={(e) => setManualRepo(e.target.value)}
+                        className="flex-1 h-8 px-2.5 rounded-[6px] bg-white/[0.03] border border-white/10
+                                   text-[12px] text-white placeholder:text-[#333333] font-mono
+                                   focus:border-white/20 focus-visible:outline-none transition-colors"
+                        style={{ letterSpacing: "-0.14px" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (manualRepo.trim()) {
+                            setSelectedRepo(manualRepo.trim())
+                            setRepoModalOpen(false)
+                            setManualRepo("")
+                          }
+                        }}
+                        className="h-8 px-3 rounded-[6px] bg-white/[0.06] border border-white/10 text-[12px] text-[#a1a1aa] hover:text-white hover:bg-white/[0.10] transition-colors"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* GitHub repos — fetched live */}
+                  {(githubRepos.length > 0 || reposLoading || projects.length > 0) && (
+                    <div className="px-4 py-2">
+                      <p className="text-[10px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-2">
+                        {reposLoading ? "Loading repositories…" : `Your repositories (${githubRepos.length || projects.length})`}
+                      </p>
+
+                      {/* All select */}
+                      <label className="flex items-center gap-3 px-3 py-2.5 rounded-[8px] border border-white/[0.07] bg-white/[0.02] cursor-pointer hover:bg-white/[0.04] transition-colors mb-1.5">
+                        <input
+                          type="checkbox"
+                          checked={repoAllSelected}
+                          onChange={() => {
+                            const next = !repoAllSelected
+                            setRepoAllSelected(next)
+                            const first = githubRepos[0]?.fullName ?? projects[0]?.repoFullName
+                            if (next && first) setSelectedRepo(first)
+                          }}
+                          className="sr-only"
+                        />
+                        <span className={`w-4 h-4 rounded-[4px] border flex items-center justify-center flex-shrink-0 transition-colors ${
+                          repoAllSelected ? "bg-white border-white" : "border-white/20"
+                        }`}>
+                          {repoAllSelected && <Check size={10} strokeWidth={3} className="text-black" />}
+                        </span>
+                        <span className="text-[13px] text-[#a1a1aa]" style={{ letterSpacing: "-0.26px" }}>
+                          All repositories
+                        </span>
+                        <span className="ml-auto text-[11px] font-mono text-[#444444]">
+                          {githubRepos.length || projects.length}
+                        </span>
+                      </label>
+
+                      {/* Individual repos — prefer GitHub live list */}
+                      {(githubRepos.length > 0 ? githubRepos.map(r => ({ repoFullName: r.fullName, id: r.fullName, targetUrl: null })) : projects)
+                        .filter(p => !repoSearch || p.repoFullName.toLowerCase().includes(repoSearch.toLowerCase()))
+                        .map((p) => {
+                          const isOn = selectedRepo === p.repoFullName
+                          return (
+                            <label
+                              key={p.id}
+                              className={`flex items-center gap-3 px-3 py-2.5 rounded-[8px] border cursor-pointer transition-colors mb-1 ${
+                                isOn ? "border-white/20 bg-white/[0.06]" : "border-transparent hover:bg-white/[0.03]"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                checked={isOn}
+                                onChange={() => {
+                                  setSelectedRepo(p.repoFullName)
+                                  setRepoAllSelected(false)
+                                }}
+                                className="sr-only"
+                              />
+                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${
+                                isOn ? "border-white bg-white" : "border-white/20"
+                              }`}>
+                                {isOn && <span className="w-1.5 h-1.5 rounded-full bg-black block" />}
+                              </span>
+                              <p className="text-[13px] font-mono text-white truncate flex-1" style={{ letterSpacing: "-0.14px" }}>
+                                {p.repoFullName}
+                              </p>
+                              {isOn && <Check size={12} className="text-white flex-shrink-0" />}
+                            </label>
+                          )
+                        })}
+                    </div>
+                  )}
+
+                      {/* All select */}
+                      <label className="flex items-center gap-3 px-3 py-2.5 rounded-[8px] border border-white/[0.07] bg-white/[0.02] cursor-pointer hover:bg-white/[0.04] transition-colors mb-1.5">
+                        <input
+                          type="checkbox"
+                          checked={repoAllSelected}
+                          onChange={() => {
+                            const next = !repoAllSelected
+                            setRepoAllSelected(next)
+                            if (next && projects[0]) {
+                              setSelectedRepo(projects[0].repoFullName)
+                            }
+                          }}
+                          className="sr-only"
+                        />
+                        <span className={`w-4 h-4 rounded-[4px] border flex items-center justify-center flex-shrink-0 transition-colors ${
+                          repoAllSelected ? "bg-white border-white" : "border-white/20"
+                        }`}>
+                          {repoAllSelected && <Check size={10} strokeWidth={3} className="text-black" />}
+                        </span>
+                        <span className="text-[13px] text-[#a1a1aa]" style={{ letterSpacing: "-0.26px" }}>
+                          All repositories
+                        </span>
+                        <span className="ml-auto text-[11px] font-mono text-[#444444]">{projects.length}</span>
+                      </label>
+
+                      {/* Individual repos */}
+                      {projects
+                        .filter(p => !repoSearch || p.repoFullName.toLowerCase().includes(repoSearch.toLowerCase()))
+                        .map((p) => {
+                          const isOn = selectedRepo === p.repoFullName
+                          return (
+                            <label
+                              key={p.id}
+                              className={`flex items-center gap-3 px-3 py-2.5 rounded-[8px] border cursor-pointer transition-colors mb-1 ${
+                                isOn
+                                  ? "border-white/20 bg-white/[0.06]"
+                                  : "border-transparent hover:bg-white/[0.03]"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                checked={isOn}
+                                onChange={() => {
+                                  setSelectedRepo(p.repoFullName)
+                                  setRepoAllSelected(false)
+                                }}
+                                className="sr-only"
+                              />
+                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${
+                                isOn ? "border-white bg-white" : "border-white/20"
+                              }`}>
+                                {isOn && <span className="w-1.5 h-1.5 rounded-full bg-black block" />}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[13px] font-mono text-white truncate" style={{ letterSpacing: "-0.14px" }}>
+                                  {p.repoFullName}
+                                </p>
+                                {p.targetUrl && (
+                                  <p className="text-[11px] text-[#444444] truncate">{p.targetUrl}</p>
+                                )}
+                              </div>
+                              {isOn && <Check size={12} className="text-white flex-shrink-0" />}
+                            </label>
+                          )
+                        })}
+                </div>
+
+                {/* Modal footer */}
+                <div className="flex items-center justify-between px-5 py-4 border-t border-white/10">
+                  <span className="text-[12px] font-mono text-[#555555]">
+                    {selectedRepo ? selectedRepo : "No repository selected"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setRepoModalOpen(false)}
+                    disabled={!selectedRepo}
+                    className="h-8 px-4 rounded-[6px] bg-white text-black text-[13px] font-medium
+                               hover:bg-white/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Target URL */}
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666]">
-            Target URL{" "}
-            <span className="text-[#444444] normal-case">— for DAST (optional)</span>
+            Target URL <span className="text-[#444444] normal-case">— for DAST (optional)</span>
           </span>
           <input
             name="targetUrl"
