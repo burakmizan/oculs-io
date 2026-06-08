@@ -97,3 +97,54 @@ export async function createProject(
     return { error: "Could not save project. Check your connection and try again." }
   }
 }
+
+export async function updateProject(
+  _prev: ProjectActionState,
+  formData: FormData,
+): Promise<ProjectActionState> {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Session expired." }
+
+  const userId      = session.user.id
+  const projectId   = String(formData.get("projectId") ?? "").trim()
+  const name        = String(formData.get("name") ?? "").trim()
+  const description = String(formData.get("description") ?? "").trim()
+  const repoRaw     = String(formData.get("repoFullName") ?? "").trim()
+  const targetUrl   = String(formData.get("targetUrl") ?? "").trim()
+  const serverIp    = String(formData.get("serverIp") ?? "").trim()
+
+  if (!projectId) return { error: "Project ID missing." }
+  if (!name)      return { error: "Project name is required." }
+  if (!repoRaw)   return { error: "Repository is required." }
+
+  const repoFullName = repoRaw.startsWith("https://github.com/")
+    ? repoRaw.replace("https://github.com/", "").replace(/\/$/, "")
+    : repoRaw
+
+  if (!REPO_RE.test(repoFullName)) {
+    return { error: "Enter repository as owner/repo (e.g. acme/api)." }
+  }
+
+  const resolvedTargetUrl = targetUrl || (serverIp ? `http://${serverIp}` : null)
+
+  try {
+    await db
+      .update(projects)
+      .set({
+        name,
+        description: description || null,
+        repoFullName,
+        repoUrl: `https://github.com/${repoFullName}`,
+        targetUrl: resolvedTargetUrl || null,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId))
+
+    revalidatePath("/dashboard/projects")
+    revalidatePath("/dashboard/scans")
+    revalidatePath("/dashboard")
+    return { ok: true }
+  } catch {
+    return { error: "Could not update project. Try again." }
+  }
+}

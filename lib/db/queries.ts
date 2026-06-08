@@ -11,6 +11,7 @@ import {
 } from "@/lib/db/schema"
 import type { DashboardStats, SeverityLevel, ScanTool } from "@/types"
 
+
 /**
  * Data-access helpers. Kept free of request/runtime concerns so they can be
  * reused from server actions, route handlers, and the Credentials provider.
@@ -187,8 +188,28 @@ export async function getRecentScans(
 
 export interface ProjectOption {
   id: string
+  name: string
   repoFullName: string
   targetUrl: string | null
+}
+
+export async function getProjectById(
+  projectId: string,
+  userId: string,
+): Promise<{ id: string; name: string; description: string | null; repoFullName: string; targetUrl: string | null; repoUrl: string | null } | null> {
+  const [row] = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      description: projects.description,
+      repoFullName: projects.repoFullName,
+      targetUrl: projects.targetUrl,
+      repoUrl: projects.repoUrl,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1)
+  return row ?? null
 }
 
 export async function getUserProjects(
@@ -197,6 +218,7 @@ export async function getUserProjects(
   return db
     .select({
       id: projects.id,
+      name: projects.name,
       repoFullName: projects.repoFullName,
       targetUrl: projects.targetUrl,
     })
@@ -241,4 +263,51 @@ export async function queueScan(input: {
     .returning({ id: scans.id })
 
   return scan.id
+}
+
+export interface VulnerabilityRow {
+  id: string
+  title: string
+  severity: string
+  tool: string
+  filePath: string | null
+  targetUrl: string | null
+  lineStart: number | null
+  cweId: string | null
+  owaspCategory: string | null
+  remediation: string | null
+  aiFixPatch: string | null
+  status: string
+  createdAt: Date
+  repoFullName: string
+  scanId: string
+}
+
+export async function getVulnerabilities(
+  userId: string,
+  limit = 50,
+): Promise<VulnerabilityRow[]> {
+  return db
+    .select({
+      id: vulnerabilities.id,
+      title: vulnerabilities.title,
+      severity: vulnerabilities.severity,
+      tool: vulnerabilities.tool,
+      filePath: vulnerabilities.filePath,
+      targetUrl: vulnerabilities.targetUrl,
+      lineStart: vulnerabilities.lineStart,
+      cweId: vulnerabilities.cweId,
+      owaspCategory: vulnerabilities.owaspCategory,
+      remediation: vulnerabilities.remediation,
+      aiFixPatch: vulnerabilities.aiFixPatch,
+      status: vulnerabilities.status,
+      createdAt: vulnerabilities.createdAt,
+      repoFullName: projects.repoFullName,
+      scanId: vulnerabilities.scanId,
+    })
+    .from(vulnerabilities)
+    .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))
+    .where(eq(vulnerabilities.userId, userId))
+    .orderBy(desc(vulnerabilities.createdAt))
+    .limit(limit)
 }

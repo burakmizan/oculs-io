@@ -119,10 +119,15 @@ Auth.js v5 requires two separate modules because the middleware runs on the Edge
 - `auth.ts` — Node-only: extends `authConfig` with the Drizzle adapter (persists OAuth accounts to Aurora) and the Credentials provider (bcrypt password auth).
 - `proxy.ts` — Next.js 16's renamed `middleware.ts`. Instantiates `NextAuth(authConfig)` on the Edge to enforce `/dashboard/*` protection and redirect logged-in users away from `/login`.
 
-**Request path for the core scan loop (partially implemented):**
-1. User queues a scan via `createScan` server action (`app/dashboard/actions.ts`), which calls `queueScan()` in `lib/db/queries.ts` — upserts the project and inserts a `scans` row with `status: "queued"`.
-2. *(Not yet implemented)* A GitHub Actions workflow POSTs results to `POST /api/webhook/scan`. The route handler will validate the HMAC-SHA256 signature, call the Gemini AI agent, and write `vulnerabilities` rows to Aurora.
-3. The dashboard reads Aurora directly via React Server Components — no polling. The `getDashboardStats` query computes a weighted 0–100 risk score from open vulnerability severities.
+**Request path for the core scan loop:**
+1. User configures a scan in `ScanModal` and submits → `createScan` server action (`app/dashboard/actions.ts`) calls `queueScan()` — upserts the project and inserts a `scans` row with `status: "queued"`, returns `scanId`.
+2. `createScan` fire-and-forgets a call to `POST /api/scan/trigger`, which dispatches a `workflow_dispatch` event on `oculs-scan.yml` in the target repo (uses `session.user.githubAccessToken`). Non-fatal if this fails — scan row is already in Aurora.
+3. GitHub Actions workflow runs the configured tools and POSTs results to `POST /api/webhook/scan`. The route handler will validate the HMAC-SHA256 signature, call the Gemini AI agent, and write `vulnerabilities` rows to Aurora. **Stub — not yet implemented.**
+4. The frontend shows `ScanProgress` while waiting — this is a **client-side animation only** (hardcoded stage list, `setTimeout` cycling). It does NOT poll Aurora. Real scan status lives only in the `scans` table.
+5. The dashboard reads Aurora directly via React Server Components — no polling. `getDashboardStats` computes a weighted 0–100 risk score from open vulnerability severities.
+
+**Organizations — single-tenant auto-creation:**
+`createProject` auto-creates one `organizations` row per user (keyed on `ownerId`) if none exists. There is no multi-tenant org management UI yet; the assumption is one org per user.
 
 **Module responsibilities:**
 
@@ -132,17 +137,27 @@ Auth.js v5 requires two separate modules because the middleware runs on the Edge
 | `auth.config.ts` | Edge-safe Auth.js config (providers, callbacks, route protection) |
 | `auth.ts` | Node-only Auth.js instance (Drizzle adapter + Credentials provider) |
 | `app/login/actions.ts` | Server actions: `signInWithGitHub`, `signInWithCredentials`, `registerAccount` |
-| `app/dashboard/actions.ts` | Server action: `createScan` — validates input, calls `queueScan` |
-| `app/api/webhook/scan/route.ts` | **Stub** — entry point for GitHub Actions payloads (not yet implemented) |
+| `app/dashboard/actions.ts` | `createScan` — validates input, calls `queueScan`, fire-and-forgets `/api/scan/trigger` |
+| `app/dashboard/projects/actions.ts` | `createProject`, `updateProject` — project CRUD with org auto-creation |
+| `app/dashboard/projects/page.tsx` | RSC — project list; reads Aurora via `getUserProjects` |
+| `app/dashboard/projects/new/page.tsx` | Client component — new project form; fetches GitHub repos via `/api/github/repos` |
+| `app/dashboard/projects/[id]/edit/page.tsx` | Client component — edit project form; reads initial values from search params |
+| `app/api/github/repos/route.ts` | Returns user's GitHub repos using `session.user.githubAccessToken`; cached 60s |
+| `app/api/scan/trigger/route.ts` | Dispatches `workflow_dispatch` on `oculs-scan.yml` in target repo |
+| `app/api/webhook/scan/route.ts` | **Stub** — entry point for GitHub Actions scan result payloads |
 | `lib/db/index.ts` | Aurora PostgreSQL client (postgres.js + Drizzle, `max: 1` for serverless) |
-| `lib/db/schema.ts` | Drizzle schema: `users`, `accounts`, `sessions`, `verificationTokens`, `projects`, `scans`, `vulnerabilities` + 8 Postgres ENUMs |
-| `lib/db/queries.ts` | Data-access helpers: auth lookups, dashboard stats, scan queuing |
+| `lib/db/schema.ts` | Drizzle schema: `users`, `accounts`, `sessions`, `verificationTokens`, `organizations`, `projects`, `scans`, `vulnerabilities` + 8 Postgres ENUMs |
+| `lib/db/queries.ts` | Data-access helpers: auth lookups, onboarding, dashboard stats, project CRUD, scan queuing |
 | `lib/tools.ts` | 20-tool security catalog (`TOOLS`, `TOOLS_BY_ID`, `CATEGORY_META`); `id` values match the `scan_tool` Postgres ENUM exactly |
 | `lib/ai/index.ts` | **Stub** — Gemini agent placeholders (`analyzeFindings`, `generateAutoFix`, `generateReport`) |
 | `lib/auth/password.ts` | `hashPassword` / `verifyPassword` via bcryptjs (pure-JS, no native bindings) |
 | `types/index.ts` | Re-exports Drizzle-inferred row types + enum string-literal unions + view models + `WebhookPayload` contract |
 | `components/landing/` | Landing page sections (NavBar, Hero, Features, Pricing, etc.) |
-| `components/dashboard/` | Dashboard UI: `Sidebar`, `ScanLauncher`, `RecentScans` |
+| `components/dashboard/Sidebar.tsx` | Left nav sidebar |
+| `components/dashboard/TopBar.tsx` | Top nav bar — page title + nav links (client component, uses `usePathname`) |
+| `components/dashboard/ScanModal.tsx` | Project card + inline scan config modal; submits to `createScan` |
+| `components/dashboard/ScanProgress.tsx` | Animated scan progress popup — **simulated only**, no Aurora polling; dismisses to a "Dynamic Island" pill |
+| `components/dashboard/RecentScans.tsx` | Recent scans list for dashboard overview |
 | `components/auth/` | `AuthForm` — shared login/register form |
 
 ## Hard Constraints
@@ -161,4 +176,5 @@ Auth.js v5 requires two separate modules because the middleware runs on the Edge
 - `lib/ai/index.ts` must use `GEMINI_API_KEY` and `GEMINI_MODEL` env vars; default model: `gemini-3.5-flash`.
 - Webhook HMAC validation must use `GITHUB_WEBHOOK_SECRET` and timing-safe comparison (`crypto.timingSafeEqual`).
 - Aurora connection uses `max: 1, ssl: "require", idle_timeout: 20, max_lifetime: 300` — do not increase `max` in serverless context.
-- Session augments `next-auth` `Session` type (declared in `auth.config.ts`) with `user.id: string` and `user.login?: string` (GitHub handle). Always read `session.user.id` (not `sub`) in server code.
+- Session augments `next-auth` `Session` type (declared in `auth.config.ts`) with `user.id: string`, `user.login?: string` (GitHub handle), and `user.githubAccessToken?: string`. Always read `session.user.id` (not `sub`) in server code. `githubAccessToken` is used by `/api/github/repos` and `/api/scan/trigger`.
+- `app/dashboard/projects/page.tsx` contains placeholder mock data (`mockCommitHash`, `isHealthy` derived from index parity) — replace with real scan status from Aurora before shipping.
