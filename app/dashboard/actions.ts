@@ -55,6 +55,11 @@ async function triggerGitHubWorkflow(
   if (!res.ok) {
     const err = await res.text()
     console.error("[createScan] GitHub workflow dispatch failed:", res.status, err)
+    // 422 = workflow_dispatch trigger not found in the branch
+    // This happens when YAML changes haven't been pushed to default branch yet
+    if (res.status === 422) {
+      console.warn("[createScan] Tip: Push the workflow YAML to main branch first, then retry.")
+    }
   } else {
     console.log(`[createScan] Workflow dispatched: ${repoFullName} scan=${scanId}`)
   }

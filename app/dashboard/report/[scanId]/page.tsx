@@ -49,11 +49,13 @@ export default async function ReportPage({ params }: Props) {
     vulns = await getVulnerabilitiesByScan(scanId, userId)
     const scans = await getUserScans(userId, 50)
     const scan = scans.find(s => s.id === scanId)
-    if (!scan) notFound()
-    repoName = scan.repoFullName
-    scanDate = scan.completedAt ?? scan.createdAt
-    if ((scan as any).targetUrl || (scan as any).summary?.targetUrl) {
-      isDastScan = true
+    // Don't notFound() — scan may be queued/running with no vulns yet
+    if (scan) {
+      repoName = scan.repoFullName
+      scanDate = scan.completedAt ?? scan.createdAt
+      if ((scan as any).targetUrl || (scan as any).summary?.targetUrl) {
+        isDastScan = true
+      }
     }
   } catch {
     notFound()

@@ -25,6 +25,9 @@ import {
   CheckCircle,
   AlertCircle,
   Info,
+  ChevronDown,
+  Plus,
+  User,
 } from "lucide-react"
 
 interface SidebarUser {
@@ -61,6 +64,12 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
   // ── Theme ────────────────────────────────────────────────────────────────
   const [theme, setTheme] = useState<Theme>("dark")
+
+  // ── Team Dropdown ──────────────────────────────────────────────────────────
+  const [teamPopoverOpen, setTeamPopoverOpen] = useState(false)
+  function toggleTeamPopover() {
+    setTeamPopoverOpen(o => !o)
+  }
 
   useEffect(() => {
     const saved = (localStorage.getItem("oculs_theme") as Theme) ?? "dark"
@@ -199,26 +208,34 @@ export function Sidebar({ user }: { user: SidebarUser }) {
     <>
       <aside className="w-[220px] flex-shrink-0 flex flex-col bg-[#000000] border-r border-white/10 h-full">
 
-        {/* Brand */}
-        <div className="h-12 flex items-center px-4 border-b border-white/10 flex-shrink-0">
-          <Link href="/dashboard"
-            className="flex items-center gap-2 hover:opacity-75 transition-opacity">
-            <span className="text-white font-mono text-[14px] font-bold tracking-tight select-none">
-              oculs.io
-            </span>
-          </Link>
-        </div>
+      {/* Brand/Team Dropdown */}
+          <div className="h-12 flex items-center border-b border-white/10 flex-shrink-0 relative">
+            <button type="button" onClick={toggleTeamPopover}
+              className="w-full flex items-center gap-2 px-4 h-full hover:bg-white/[0.04] transition-colors text-left">
+              <div className="w-6 h-6 rounded-full bg-red-600 border border-white/10 flex-shrink-0"
+                   style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
+              <div className="flex-1 min-w-0 flex items-center gap-2">
+                <span className="text-white text-[14px] font-semibold truncate">
+                  Burak's projects
+                </span>
+                <span className="px-1.5 py-0.5 rounded-[4px] bg-white/[0.08] text-[10px] text-[#888888]">
+                  Hobby
+                </span>
+              </div>
+              <ChevronDown size={14} className="text-[#666666] flex-shrink-0 ml-auto" />
+            </button>
+          </div>
 
         {/* Search */}
-        <div className="px-3 pt-3 pb-2 border-b border-white/[0.05]">
-          <div className="flex items-center gap-2 h-8 px-2.5 rounded-[6px] bg-white/[0.03]
-                          border border-white/10 text-[#888888] focus-within:border-white/20 transition-colors">
-            <Search size={13} />
-            <input type="text" placeholder="Find..."
-              className="flex-1 bg-transparent border-none outline-none text-[12px]
-                         placeholder:text-[#555555] text-white" />
-          </div>
+      <div className="px-3 pt-3 pb-2 border-b border-white/[0.05]">
+        <div className="flex items-center gap-3 h-10 px-3 rounded-[8px] bg-white/[0.03]
+                        border border-white/10 text-[#888888] focus-within:border-white/20 transition-colors">
+          <Search size={16} />
+          <input type="text" placeholder="Find..."
+            className="flex-1 w-full bg-transparent border-none outline-none text-[14px]
+                       placeholder:text-[#555555] text-white" />
         </div>
+      </div>
 
         {/* Navigation */}
         <nav className="flex-1 p-3 flex flex-col gap-0.5 overflow-y-auto">
@@ -229,13 +246,13 @@ export function Sidebar({ user }: { user: SidebarUser }) {
               : pathname.startsWith(item.href)
             return (
               <Link key={item.label} href={item.href}
-                className={`flex items-center gap-2.5 h-8 px-2.5 rounded-[6px] text-[13px] transition-colors
+                className={`flex items-center gap-3 h-10 px-3 rounded-[8px] text-[15px] transition-colors
                   ${isActive
-                    ? "bg-white/[0.08] text-white"
+                    ? "bg-white/[0.04] text-white"
                     : "text-[#666666] hover:text-white hover:bg-white/[0.04]"
                   }`}
                 style={{ letterSpacing: "-0.26px" }}>
-                <Icon size={14} />
+                <Icon size={18} />
                 {item.label}
               </Link>
             )
@@ -291,13 +308,12 @@ export function Sidebar({ user }: { user: SidebarUser }) {
           <div className="h-px bg-white/[0.07] my-1" />
 
           {/* User row */}
-          <div className="flex items-center gap-2 px-2.5 py-1.5">
-            <div className="w-6 h-6 rounded-full bg-white/10 border border-white/15
-                            flex items-center justify-center flex-shrink-0">
-              {user.image ? (
-                <img src={user.image} alt={displayName} className="w-full h-full rounded-full object-cover" />
-              ) : (
-                <span className="text-[10px] font-mono text-white">{initial}</span>
+          <div className="flex items-center gap-3 px-2.5 py-1.5">
+            <div className="w-8 h-8 rounded-full bg-red-600 border border-white/10
+                            flex items-center justify-center flex-shrink-0 overflow-hidden shadow-sm"
+                 style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }}>
+              {user.image && (
+                <img src={user.image} alt={displayName} className="w-full h-full object-cover" />
               )}
             </div>
             <div className="flex-1 min-w-0">
@@ -476,7 +492,7 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
             {helpDone ? (
               <div className="flex flex-col items-center justify-center py-10 gap-3">
-                <CheckCircle size={24} className="text-[#4ade80]" />
+                <CheckCircle size={24} className="text-[#F01124]" />
                 <p className="text-[13px] text-white">Your request has been sent!</p>
                 <p className="text-[12px] text-[#555555]">We'll get back to you shortly.</p>
               </div>
@@ -528,6 +544,55 @@ export function Sidebar({ user }: { user: SidebarUser }) {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+    {/* ── Team Popover ───────────────────────────────────────────────────────────── */}
+      {teamPopoverOpen && (
+        <div className="fixed left-0 top-[64px] z-[9999] w-[320px] ml-1 mt-1">
+          <div className="bg-[#0a0a0a] border border-white/15 rounded-[12px] overflow-hidden shadow-2xl p-4 flex flex-col gap-4">
+            {/* Search */}
+            <div className="flex items-center gap-3 h-10 px-3 rounded-[8px] bg-white/[0.03] border border-white/10 text-[#888888]">
+              <Search size={16} />
+              <input type="text" placeholder="Find Team..." className="flex-1 bg-transparent border-none outline-none text-[14px] placeholder:text-[#555555] text-white" />
+              <span className="text-[10px] font-mono text-[#444444] tracking-tight">Esc</span>
+            </div>
+
+            {/* Team List */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-[8px] bg-white/[0.04] text-white">
+                    <div className="w-6 h-6 rounded-full bg-red-600 border border-white/10"
+                         style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
+                <span className="flex-1 text-[15px] font-semibold">Burak's projects</span>
+                <span className="px-2 py-0.5 rounded-full bg-white/[0.08] text-[12px] text-[#888888]">Hobby</span>
+                <CheckCircle size={16} className="text-[#4ade80]" />
+              </div>
+            </div>
+
+            {/* User placeholder */}
+            <div className="flex items-center justify-center py-6">
+              <User size={32} className="text-[#333333]" />
+            </div>
+            <div className="flex flex-col items-center gap-1.5 pb-2">
+              <p className="text-[12px] text-[#444444] text-center max-w-[200px]">Teams you create and join appear here for quick context switching.</p>
+            </div>
+
+            <div className="h-px bg-white/[0.07] my-1" />
+
+            {/* Create Team */}
+            <button type="button" className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-[#666666] hover:text-white hover:bg-white/[0.04] transition-colors w-full text-left">
+              <Plus size={16} />
+              <div>
+                <span className="block font-semibold">Create Team</span>
+                <span className="block text-[12px] text-[#444444]">Collaborate with others in a shared workspace</span>
+              </div>
+            </button>
+
+            {/* Environment Variables */}
+            <a href="/dashboard/settings/env-vars" className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-[#666666] hover:text-white hover:bg-white/[0.04] transition-colors">
+              <Settings size={16} />
+              <span>Environment Variables</span>
+            </a>
           </div>
         </div>
       )}
