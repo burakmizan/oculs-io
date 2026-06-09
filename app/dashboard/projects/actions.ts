@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache"
 import { auth } from "@/auth"
 import { db } from "@/lib/db"
-import { projects, organizations } from "@/lib/db/schema"
-import { eq } from "drizzle-orm"
+import { projects, organizations, users } from "@/lib/db/schema"
+import { eq, count, and } from "drizzle-orm"
+import { cookies } from "next/headers"
 
 export interface ProjectActionState {
   error?: string
@@ -37,6 +38,26 @@ export async function createProject(
 
   if (!REPO_RE.test(repoFullName)) {
     return { error: "Enter repository as owner/repo (e.g. acme/api)." }
+  }
+
+  try {
+    const [userRecord] = await db.select({ plan: users.plan }).from(users).where(eq(users.id, userId)).limit(1)
+    if (!userRecord || userRecord.plan === "starter") {
+      const [projectCount] = await db.select({ c: count() }).from(projects).where(eq(projects.userId, userId))
+      if (projectCount.c >= 1) {
+        return { error: "UPGRADE_REQUIRED_PROJECTS" }
+      }
+    }
+  } catch (err) {
+
+    try {
+      const [projectCount] = await db.select({ c: count() }).from(projects).where(eq(projects.userId, userId))
+      if (projectCount.c >= 1) {
+        return { error: "UPGRADE_REQUIRED_PROJECTS" }
+      }
+    } catch (e) {
+      console.error(e)
+    }
   }
 
   // Resolve or create the user's organization
@@ -146,5 +167,19 @@ export async function updateProject(
     return { ok: true }
   } catch {
     return { error: "Could not update project. Try again." }
+  }
+}
+
+export async function deleteProject(projectId: string) {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Session expired." }
+
+  try {
+    await db.delete(projects).where(and(eq(projects.id, projectId), eq(projects.userId, session.user.id)))
+    revalidatePath("/dashboard/projects")
+    revalidatePath("/dashboard")
+    return { ok: true }
+  } catch (e) {
+    return { error: "Could not delete project." }
   }
 }

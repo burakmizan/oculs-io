@@ -2,7 +2,8 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
 import { getUserProjects } from "@/lib/db/queries"
-import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit } from "lucide-react"
+import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2 } from "lucide-react"
+import { deleteProject } from "./actions"
 
 // Add name field to ProjectOption type usage
 
@@ -146,6 +147,22 @@ export default async function ProjectsPage() {
                     >
                       ↗
                     </a>
+                    
+                    <div className="w-px h-6 bg-white/10 mx-1"></div>
+                    
+                    <form action={async () => {
+                      "use server";
+                      await deleteProject(p.id);
+                    }}>
+                      <button
+                        type="submit"
+                        className="flex items-center justify-center w-8 h-8 rounded-[6px] border border-red-500/20 text-[#f87171]
+                                   hover:bg-red-500/10 transition-colors bg-red-500/5"
+                        title="Delete Project"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </form>
                   </div>
                 </div>
               </div>

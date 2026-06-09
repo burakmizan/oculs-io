@@ -6,6 +6,7 @@ import { createScan, type ScanActionState } from "@/app/dashboard/actions"
 import { TOOLS } from "@/lib/tools"
 import type { ScanTool } from "@/types"
 import { ScanProgress } from "@/components/dashboard/ScanProgress"
+import { UpgradeModal } from "@/components/dashboard/UpgradeModal"
 
 const INIT: ScanActionState = {}
 
@@ -40,6 +41,8 @@ export function ScanModal({ project }: Props) {
   )
 
   const [showProgress, setShowProgress] = useState(false)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [upgradeReason, setUpgradeReason] = useState<{feature: string, desc: string} | null>(null)
 
   // Enable DAST automatically if project has targetUrl
   useEffect(() => {
@@ -54,7 +57,21 @@ export function ScanModal({ project }: Props) {
       setOpen(false)
       setShowProgress(true)
     }
-  }, [state.ok, state.scanId])
+    
+    if (state.error === "UPGRADE_REQUIRED_DAST") {
+      setUpgradeReason({
+        feature: "Dynamic Application Security Testing (DAST)",
+        desc: "The Starter plan only includes SAST. Upgrade to Pro to unlock DAST and scan live endpoints for runtime vulnerabilities."
+      })
+      setShowUpgradeModal(true)
+    } else if (state.error === "UPGRADE_REQUIRED_SCANS") {
+      setUpgradeReason({
+        feature: "Monthly Scan Limit Reached",
+        desc: "You have reached your limit of 3 scans per month on the Starter plan. Upgrade to Pro for 50 scans per month and continuous security coverage."
+      })
+      setShowUpgradeModal(true)
+    }
+  }, [state.ok, state.scanId, state.error])
 
   function toggleSast(id: ScanTool) {
     setSelectedSast(prev => {
@@ -351,7 +368,7 @@ export function ScanModal({ project }: Props) {
                   {allSelected.length} tools · {project.repoFullName}
                 </span>
                 <div className="flex items-center gap-3">
-                  {state.error && (
+                  {state.error && !state.error.includes("UPGRADE_REQUIRED") && (
                     <span className="text-[11px] text-[#f87171]">{state.error}</span>
                   )}
                   <button type="submit"
@@ -366,6 +383,15 @@ export function ScanModal({ project }: Props) {
             </form>
           </div>
         </div>
+      )}
+
+      {showUpgradeModal && upgradeReason && (
+        <UpgradeModal
+          isOpen={showUpgradeModal}
+          onClose={() => setShowUpgradeModal(false)}
+          feature={upgradeReason.feature}
+          description={upgradeReason.desc}
+        />
       )}
     </>
   )

@@ -1,5 +1,6 @@
 import { eq, and, count, desc, inArray } from "drizzle-orm"
 import { db } from "@/lib/db"
+import { cookies } from "next/headers"
 import {
   users,
   organizations,
@@ -127,15 +128,32 @@ const RISK_WEIGHTS: Record<SeverityLevel, number> = {
 export async function getDashboardStats(
   userId: string,
 ): Promise<DashboardStats> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  // Takıma veya kişisele göre Where şartı
+  const projectCondition = activeTeamId === "personal" 
+    ? eq(projects.userId, userId) 
+    : eq((projects as any).teamId, activeTeamId)
+
+  // Scan ve zafiyetler projectId'ye bağlı olduğu için alt sorgu kullanıyoruz
+  const scanCondition = activeTeamId === "personal"
+    ? eq(scans.userId, userId)
+    : inArray(scans.projectId, db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)))
+
+  const vulnCondition = activeTeamId === "personal"
+    ? eq(vulnerabilities.userId, userId)
+    : inArray(vulnerabilities.projectId, db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)))
+
   const [projectCount, scanCount, openBySeverity] = await Promise.all([
-    db.select({ c: count() }).from(projects).where(eq(projects.userId, userId)),
-    db.select({ c: count() }).from(scans).where(eq(scans.userId, userId)),
+    db.select({ c: count() }).from(projects).where(projectCondition),
+    db.select({ c: count() }).from(scans).where(scanCondition),
     db
       .select({ severity: vulnerabilities.severity, c: count() })
       .from(vulnerabilities)
       .where(
         and(
-          eq(vulnerabilities.userId, userId),
+          vulnCondition,
           inArray(vulnerabilities.status, ["open", "in_review"]),
         ),
       )
@@ -170,6 +188,9 @@ export async function getRecentScans(
   userId: string,
   limit = 6,
 ): Promise<RecentScanRow[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
   return db
     .select({
       id: scans.id,
@@ -181,7 +202,9 @@ export async function getRecentScans(
     })
     .from(scans)
     .innerJoin(projects, eq(scans.projectId, projects.id))
-    .where(eq(scans.userId, userId))
+    .where(activeTeamId === "personal" 
+      ? eq(scans.userId, userId) 
+      : eq((projects as any).teamId, activeTeamId))
     .orderBy(desc(scans.createdAt))
     .limit(limit)
 }
@@ -215,6 +238,9 @@ export async function getProjectById(
 export async function getUserProjects(
   userId: string,
 ): Promise<ProjectOption[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
   return db
     .select({
       id: projects.id,
@@ -223,7 +249,9 @@ export async function getUserProjects(
       targetUrl: projects.targetUrl,
     })
     .from(projects)
-    .where(eq(projects.userId, userId))
+    .where(activeTeamId === "personal" 
+      ? eq(projects.userId, userId) 
+      : eq((projects as any).teamId, activeTeamId))
     .orderBy(desc(projects.updatedAt))
 }
 
@@ -264,16 +292,21 @@ export async function queueScan(input: {
     }
   } catch { /* non-fatal — proceed without org */ }
 
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const finalTeamId = activeTeamId === "personal" ? null : activeTeamId
+
   const [project] = await db
     .insert(projects)
     .values({
       userId: input.userId,
       organizationId: orgId,
+      teamId: finalTeamId,
       name: input.repoFullName.split("/").pop() ?? input.repoFullName,
       repoFullName: input.repoFullName,
       repoUrl: `https://github.com/${input.repoFullName}`,
       targetUrl: input.targetUrl,
-    })
+    } as any)
     .onConflictDoUpdate({
       target: [projects.userId, projects.repoFullName],
       set: { targetUrl: input.targetUrl, updatedAt: new Date() },
@@ -316,6 +349,9 @@ export async function getVulnerabilities(
   userId: string,
   limit = 50,
 ): Promise<VulnerabilityRow[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
   return db
     .select({
       id: vulnerabilities.id,
@@ -336,7 +372,9 @@ export async function getVulnerabilities(
     })
     .from(vulnerabilities)
     .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))
-    .where(eq(vulnerabilities.userId, userId))
+    .where(activeTeamId === "personal" 
+      ? eq(vulnerabilities.userId, userId) 
+      : eq((projects as any).teamId, activeTeamId))
     .orderBy(desc(vulnerabilities.createdAt))
     .limit(limit)
 }
@@ -355,6 +393,9 @@ export async function getUserScans(
   userId: string,
   limit = 50,
 ): Promise<ScanListRow[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
   const rows = await db
     .select({
       id: scans.id,
@@ -367,7 +408,9 @@ export async function getUserScans(
     })
     .from(scans)
     .innerJoin(projects, eq(scans.projectId, projects.id))
-    .where(eq(scans.userId, userId))
+    .where(activeTeamId === "personal" 
+      ? eq(scans.userId, userId) 
+      : eq((projects as any).teamId, activeTeamId))
     .orderBy(desc(scans.createdAt))
     .limit(limit)
 

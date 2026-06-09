@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache"
 import { auth } from "@/auth"
 import { queueScan } from "@/lib/db/queries"
 import { db } from "@/lib/db"
-import { scans, projects } from "@/lib/db/schema"
-import { eq } from "drizzle-orm"
+import { scans, vulnerabilities, teams, teamMembers, teamInvites, projects, users, accounts } from "@/lib/db/schema"
+import { cookies } from "next/headers"
+import { eq, and, count } from "drizzle-orm"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { ScanTool } from "@/types"
 
@@ -89,6 +90,33 @@ export async function createScan(
     return { error: "Select at least one scanner to run." }
   }
 
+  // ── PLAN LIMIT KONTROLÜ ──
+  const [userRecord] = await db.select({ plan: users.plan }).from(users).where(eq(users.id, session.user.id)).limit(1)
+  
+  if (userRecord?.plan === "starter") {
+    // 1. DAST Engeli
+    const isDastSelected = targetUrlRaw !== "" || tools.some(t => ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"].includes(t))
+    if (isDastSelected) {
+      return { error: "UPGRADE_REQUIRED_DAST" }
+    }
+
+    // 2. Aylık Tarama Limiti (Max 3)
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    
+    const [scanCount] = await db.select({ c: count() })
+      .from(scans)
+      .where(
+        and(
+          eq(scans.userId, session.user.id),
+        )
+      )
+    
+    if (scanCount.c >= 3) {
+      return { error: "UPGRADE_REQUIRED_SCANS" }
+    }
+  }
+
   let scanId: string
   try {
     scanId = await queueScan({
@@ -122,4 +150,145 @@ export async function createScan(
   }
 
   return { ok: true, scanId }
+}
+
+export async function createTeam(name: string, userId: string) {
+  try {
+    const [newTeam] = await db.insert(teams).values({ name }).returning();
+    
+    // Create member as owner
+    await db.insert(teamMembers).values({
+      teamId: newTeam.id,
+      userId,
+      role: "owner"
+    });
+
+    // Set active team cookie
+    const cookieStore = await cookies();
+    cookieStore.set("active_team_id", newTeam.id);
+    
+    return { ok: true, teamId: newTeam.id };
+  } catch (err) {
+    console.error("Failed to create team:", err);
+    return { ok: false, error: "Failed to create team" };
+  }
+}
+
+export async function inviteMembers(teamId: string, emails: string[]) {
+  try {
+    const inviteRecords = emails.filter(email => email.trim() !== "").map(email => {
+      const token = globalThis.crypto.randomUUID();
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+
+      return {
+        teamId,
+        email: email.trim(),
+        token,
+        expiresAt
+      };
+    });
+
+    if (inviteRecords.length === 0) return { ok: false, error: "No valid emails provided" };
+
+    await db.insert(teamInvites).values(inviteRecords);
+
+    // Dynamic Hackathon URL generation
+    const inviteLinks = inviteRecords.map(r => ({
+      email: r.email,
+      link: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/invite/accept?token=${r.token}`
+    }));
+
+    // In a hackathon production runtime, print links to logs or return them
+    console.log("[INVITE LINKS GENERATED]:", inviteLinks);
+
+    return { ok: true, invites: inviteLinks };
+  } catch (err) {
+    console.error("Failed to process invites:", err);
+    return { ok: false, error: "Failed to process invitations" };
+  }
+}
+
+export async function switchTeam(teamId: string) {
+  const cookieStore = await cookies();
+  cookieStore.set("active_team_id", teamId);
+  return { ok: true };
+}
+
+export async function getUserTeams(userId: string) {
+  try {
+    const userTeams = await db
+      .select({ id: teams.id, name: teams.name })
+      .from(teams)
+      .innerJoin(teamMembers, eq(teams.id, teamMembers.teamId))
+      .where(eq(teamMembers.userId, userId));
+
+    const cookieStore = await cookies();
+    const activeTeamId = cookieStore.get("active_team_id")?.value || "personal";
+
+    return { ok: true, teams: userTeams, activeTeamId };
+  } catch (err) {
+    console.error("Failed to fetch teams:", err);
+    return { ok: false, teams: [], activeTeamId: "personal" };
+  }
+}
+
+export async function updateProfile(name: string) {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Unauthorized" }
+  try {
+    await db.update(users).set({ name }).where(eq(users.id, session.user.id))
+    revalidatePath("/dashboard/settings")
+    return { ok: true }
+  } catch (e) {
+    return { error: "Failed to update profile" }
+  }
+}
+
+export async function disconnectGitHub() {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Unauthorized" }
+  try {
+
+    await db.delete(accounts).where(and(eq(accounts.userId, session.user.id), eq(accounts.provider, "github")))
+    revalidatePath("/dashboard/settings")
+    return { ok: true }
+  } catch (e) {
+    return { error: "Failed to disconnect GitHub" }
+  }
+}
+
+export async function deleteAccount() {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Unauthorized" }
+  try {
+    await db.delete(users).where(eq(users.id, session.user.id))
+    return { ok: true }
+  } catch (e) {
+    return { error: "Failed to delete account" }
+  }
+}
+
+export async function updateTeamName(teamId: string, name: string) {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Unauthorized" }
+  try {
+    await db.update(teams).set({ name }).where(eq(teams.id, teamId))
+    revalidatePath("/dashboard/settings")
+    return { ok: true }
+  } catch (e) {
+    return { error: "Failed to update team name" }
+  }
+}
+
+export async function removeTeamMember(teamId: string, targetUserId: string) {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Unauthorized" }
+  try {
+    await db.delete(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, targetUserId)))
+    revalidatePath("/dashboard/settings")
+    return { ok: true }
+  } catch (e) {
+    return { error: "Failed to remove member" }
+  }
 }

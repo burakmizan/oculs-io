@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
+import { createTeam, inviteMembers, switchTeam, getUserTeams } from "@/app/dashboard/actions"
 import {
   LayoutGrid,
   ScanIcon,
@@ -31,19 +32,30 @@ import {
 } from "lucide-react"
 
 interface SidebarUser {
+  id?: string
   name?: string | null
   email?: string | null
   image?: string | null
   login?: string
 }
 
-const NAV_ITEMS = [
+const NAV_ITEMS: {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+  subItems?: { label: string; href: string }[];
+}[] = [
   { label: "Overview",  href: "/dashboard",           icon: LayoutGrid    },
   { label: "Projects",  href: "/dashboard/projects",  icon: GitBranch     },
   { label: "Scans",     href: "/dashboard/scans",     icon: ScanIcon      },
   { label: "Findings",  href: "/dashboard/findings",  icon: AlertTriangle },
-  { label: "Settings",  href: "/dashboard/settings",  icon: Settings      },
-] as const
+  { label: "Settings",  href: "/dashboard/settings",  icon: Settings,
+    subItems: [
+      { label: "Personal Settings", href: "/dashboard/settings?tab=personal" },
+      { label: "Team Settings", href: "/dashboard/settings?tab=team" }
+    ]
+  },
+]
 
 type Theme = "system" | "light" | "dark"
 type FeedbackRating = "happy" | "neutral" | "sad" | null
@@ -62,13 +74,61 @@ export function Sidebar({ user }: { user: SidebarUser }) {
   const pathname = usePathname()
   const router = useRouter()
 
+  const getTeamColor = (name: string) => {
+    if (!name || name === "Personal Projects") return "bg-red-600";
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    const colors = ["bg-blue-600", "bg-emerald-600", "bg-violet-600", "bg-amber-600", "bg-pink-600", "bg-cyan-600"];
+    return colors[Math.abs(hash) % colors.length];
+  };
+
   // ── Theme ────────────────────────────────────────────────────────────────
   const [theme, setTheme] = useState<Theme>("dark")
 
-  // ── Team Dropdown ──────────────────────────────────────────────────────────
+  // ── Team Dropdown & Management ─────────────────────────────────────────────
   const [teamPopoverOpen, setTeamPopoverOpen] = useState(false)
+  const [teamModalOpen, setTeamModalOpen] = useState(false)
+  const [inviteModalOpen, setInviteModalOpen] = useState(false)
+  const [teamName, setTeamName] = useState("")
+  const [inviteEmails, setInviteEmails] = useState<string[]>([""])
+  const [activeTeam, setActiveTeam] = useState({ id: "personal", name: "Personal Projects" })
+  const [myTeams, setMyTeams] = useState<{id: string, name: string}[]>([])
+
+  // Kullanıcının sahip olduğu/dahil olduğu takımları sayfa yüklenince UI'a basar
+  useEffect(() => {
+    if (!user.id) return;
+    getUserTeams(user.id).then(res => {
+      if (res.ok) {
+        setMyTeams(res.teams);
+        if (res.activeTeamId && res.activeTeamId !== "personal") {
+          const active = res.teams.find((t: any) => t.id === res.activeTeamId);
+          if (active) setActiveTeam({ id: active.id, name: active.name });
+        }
+      }
+    });
+  }, [user.id]);
+
   function toggleTeamPopover() {
     setTeamPopoverOpen(o => !o)
+  }
+
+  async function handleCreateTeam() {
+    if (!teamName.trim() || !user.id) return
+    const res = await createTeam(teamName, user.id)
+    if (res.ok) {
+      setTeamModalOpen(false)
+      setTeamName("")
+      window.location.reload()
+    }
+  }
+
+  async function handleSendInvites() {
+    const res = await inviteMembers(activeTeam.id, inviteEmails)
+    if (res.ok) {
+      setInviteModalOpen(false)
+      setInviteEmails([""])
+      alert("Invitations generated successfully! (Check server logs for links)")
+    }
   }
 
   useEffect(() => {
@@ -212,14 +272,14 @@ export function Sidebar({ user }: { user: SidebarUser }) {
           <div className="h-12 flex items-center border-b border-white/10 flex-shrink-0 relative">
             <button type="button" onClick={toggleTeamPopover}
               className="w-full flex items-center gap-2 px-4 h-full hover:bg-white/[0.04] transition-colors text-left">
-              <div className="w-6 h-6 rounded-full bg-red-600 border border-white/10 flex-shrink-0"
+              <div className={`w-6 h-6 rounded-full ${getTeamColor(activeTeam.name)} border border-white/10 flex-shrink-0`}
                    style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
               <div className="flex-1 min-w-0 flex items-center gap-2">
                 <span className="text-white text-[14px] font-semibold truncate">
-                  Burak's projects
+                  {activeTeam.name}
                 </span>
-                <span className="px-1.5 py-0.5 rounded-[4px] bg-white/[0.08] text-[10px] text-[#888888]">
-                  Hobby
+                <span className="px-1.5 py-0.5 rounded-[4px] bg-white/[0.08] text-[10px] text-[#888888] uppercase tracking-wider font-mono">
+                  {activeTeam.id === "personal" ? "Hobby" : "Free"}
                 </span>
               </div>
               <ChevronDown size={14} className="text-[#666666] flex-shrink-0 ml-auto" />
@@ -243,7 +303,36 @@ export function Sidebar({ user }: { user: SidebarUser }) {
             const Icon = item.icon
             const isActive = item.href === "/dashboard"
               ? pathname === "/dashboard"
-              : pathname.startsWith(item.href)
+              : pathname.startsWith(item.href.split('?')[0])
+
+            if (item.subItems) {
+              return (
+                <div key={item.label} className="flex flex-col">
+                  <Link href={item.subItems[0].href}
+                    className={`flex items-center justify-between h-10 px-3 rounded-[8px] text-[15px] transition-colors w-full
+                      ${isActive ? "bg-white/[0.04] text-white" : "text-[#666666] hover:text-white hover:bg-white/[0.04]"}`}
+                    style={{ letterSpacing: "-0.26px" }}>
+                    <div className="flex items-center gap-3">
+                      <Icon size={18} />
+                      {item.label}
+                    </div>
+                    <ChevronDown size={14} className={`transition-transform duration-200 ${isActive ? "rotate-180" : "-rotate-90"}`} />
+                  </Link>
+                  {isActive && (
+                    <div className="flex flex-col gap-0.5 mt-1 pl-9">
+                      {item.subItems.map(sub => (
+                        <Link key={sub.label} href={sub.href}
+                          className="flex items-center h-8 px-3 rounded-[8px] text-[13px] text-[#888888] hover:text-white hover:bg-white/[0.04] transition-colors"
+                        >
+                          {sub.label}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
             return (
               <Link key={item.label} href={item.href}
                 className={`flex items-center gap-3 h-10 px-3 rounded-[8px] text-[15px] transition-colors
@@ -549,6 +638,8 @@ export function Sidebar({ user }: { user: SidebarUser }) {
       )}
     {/* ── Team Popover ───────────────────────────────────────────────────────────── */}
       {teamPopoverOpen && (
+        <>
+        <div className="fixed inset-0 z-[9998]" onClick={() => setTeamPopoverOpen(false)} />
         <div className="fixed left-0 top-[64px] z-[9999] w-[320px] ml-1 mt-1">
           <div className="bg-[#0a0a0a] border border-white/15 rounded-[12px] overflow-hidden shadow-2xl p-4 flex flex-col gap-4">
             {/* Search */}
@@ -559,40 +650,104 @@ export function Sidebar({ user }: { user: SidebarUser }) {
             </div>
 
             {/* Team List */}
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-[8px] bg-white/[0.04] text-white">
-                    <div className="w-6 h-6 rounded-full bg-red-600 border border-white/10"
-                         style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
-                <span className="flex-1 text-[15px] font-semibold">Burak's projects</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/[0.08] text-[12px] text-[#888888]">Hobby</span>
-                <CheckCircle size={16} className="text-[#4ade80]" />
-              </div>
-            </div>
+            <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto pr-1">
+              <button onClick={async () => { await switchTeam("personal"); window.location.reload(); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[8px] hover:bg-white/[0.04] transition-colors text-white text-left">
+                <div className="w-6 h-6 rounded-full bg-red-600 border border-white/10"
+                     style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
+                <span className="flex-1 text-[14px] font-medium">Personal Projects</span>
+                {activeTeam.id === "personal" && <CheckCircle size={16} className="text-[#4ade80]" />}
+              </button>
 
-            {/* User placeholder */}
-            <div className="flex items-center justify-center py-6">
-              <User size={32} className="text-[#333333]" />
-            </div>
-            <div className="flex flex-col items-center gap-1.5 pb-2">
-              <p className="text-[12px] text-[#444444] text-center max-w-[200px]">Teams you create and join appear here for quick context switching.</p>
+              {myTeams.map(t => (
+                <button key={t.id} onClick={async () => { await switchTeam(t.id); window.location.reload(); }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[8px] hover:bg-white/[0.04] transition-colors text-white text-left">
+                  <div className={`w-6 h-6 rounded-full ${getTeamColor(t.name)} border border-white/10 flex-shrink-0`}
+                       style={{ backgroundImage: 'radial-gradient(circle at center, rgba(255,255,255,0.3) 1px, transparent 1px)', backgroundSize: '4px 4px' }} />
+                  <span className="flex-1 text-[14px] font-medium">{t.name}</span>
+                  {activeTeam.id === t.id && <CheckCircle size={16} className="text-[#4ade80]" />}
+                </button>
+              ))}
             </div>
 
             <div className="h-px bg-white/[0.07] my-1" />
 
             {/* Create Team */}
-            <button type="button" className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-[#666666] hover:text-white hover:bg-white/[0.04] transition-colors w-full text-left">
+            <button type="button" onClick={() => { setTeamModalOpen(true); setTeamPopoverOpen(false); }} className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-white bg-white/5 hover:bg-white/10 transition-colors w-full text-left">
               <Plus size={16} />
               <div>
-                <span className="block font-semibold">Create Team</span>
-                <span className="block text-[12px] text-[#444444]">Collaborate with others in a shared workspace</span>
+                <span className="block font-medium">Create New Team</span>
               </div>
             </button>
 
-            {/* Environment Variables */}
-            <a href="/dashboard/settings/env-vars" className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-[#666666] hover:text-white hover:bg-white/[0.04] transition-colors">
-              <Settings size={16} />
-              <span>Environment Variables</span>
-            </a>
+            {/* Invite Members */}
+            {activeTeam.id !== "personal" && (
+              <button type="button" onClick={() => { setInviteModalOpen(true); setTeamPopoverOpen(false); }} className="flex items-center gap-3 h-10 px-3 rounded-[8px] text-[14px] text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 transition-colors w-full text-left">
+                <User size={16} />
+                <div>
+                  <span className="block font-medium">Invite Members</span>
+                </div>
+              </button>
+            )}
+          </div>
+        </div>
+        </>
+      )}
+
+      {/* ── Modals ───────────────────────────────────────────────────────────── */}
+      {teamModalOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-[400px] bg-[#0a0a0a] border border-white/10 rounded-[16px] p-5 shadow-2xl">
+            <h4 className="text-[15px] font-semibold text-white mb-1">Create New Team</h4>
+            <p className="text-[12px] text-zinc-400 mb-5">Establish an isolated collaborative space for team infrastructure scans.</p>
+            <input 
+              type="text" 
+              value={teamName}
+              onChange={e => setTeamName(e.target.value)}
+              placeholder="e.g., My Team" 
+              className="w-full h-10 px-3 rounded-[8px] bg-white/[0.03] border border-white/10 text-[13px] text-white focus:outline-none focus:border-white/30 mb-5"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setTeamModalOpen(false)} className="h-9 px-4 rounded-[8px] text-[13px] font-medium text-zinc-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleCreateTeam} className="h-9 px-4 rounded-[8px] bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors">Create Team</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {inviteModalOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-[420px] bg-[#0a0a0a] border border-white/10 rounded-[16px] p-5 shadow-2xl flex flex-col max-h-[80vh]">
+            <h4 className="text-[15px] font-semibold text-white mb-1">Invite Members to Team</h4>
+            <p className="text-[12px] text-zinc-400 mb-5">Input recipient email addresses to dispatch secure single-use access credentials.</p>
+            
+            <div className="flex-1 overflow-y-auto flex flex-col gap-2.5 mb-5 pr-1">
+              {inviteEmails.map((email, idx) => (
+                <input 
+                  key={idx}
+                  type="email"
+                  value={email}
+                  onChange={e => {
+                    const next = [...inviteEmails];
+                    next[idx] = e.target.value;
+                    setInviteEmails(next);
+                  }}
+                  placeholder="partner@agency.com"
+                  className="w-full h-10 px-3 rounded-[8px] bg-white/[0.03] border border-white/10 text-[13px] text-white focus:outline-none focus:border-white/30 font-mono"
+                />
+              ))}
+              <button 
+                onClick={() => setInviteEmails([...inviteEmails, ""])}
+                className="text-left text-[12px] text-emerald-400 hover:text-emerald-300 font-medium py-1"
+              >
+                + Add Another Email
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 flex-shrink-0">
+              <button onClick={() => setInviteModalOpen(false)} className="h-9 px-4 rounded-[8px] text-[13px] font-medium text-zinc-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleSendInvites} className="h-9 px-4 rounded-[8px] bg-emerald-500 text-black text-[13px] font-semibold hover:bg-emerald-400 transition-colors">Dispatch Invites</button>
+            </div>
           </div>
         </div>
       )}

@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createProject, type ProjectActionState } from "@/app/dashboard/projects/actions"
+import { UpgradeModal } from "@/components/dashboard/UpgradeModal"
 
 const INIT: ProjectActionState = {}
 
@@ -30,9 +31,12 @@ export default function NewProjectPage() {
       .finally(() => setReposLoading(false))
   }, [])
 
+  const [showUpgrade, setShowUpgrade] = useState(false)
+
   useEffect(() => {
     if (state.ok) router.push("/dashboard/projects")
-  }, [state.ok, router])
+    if (state.error === "UPGRADE_REQUIRED_PROJECTS") setShowUpgrade(true)
+  }, [state.ok, state.error, router])
 
   const filteredRepos = githubRepos.filter(r =>
     !repoSearch || r.fullName.toLowerCase().includes(repoSearch.toLowerCase())
@@ -269,7 +273,7 @@ export default function NewProjectPage() {
           />
         </div>
 
-        {state.error && (
+        {state.error && state.error !== "UPGRADE_REQUIRED_PROJECTS" && (
           <div className="flex items-center gap-2 px-3 py-2.5 rounded-[8px] border border-[#f87171]/20 bg-[#f87171]/[0.04]">
             <span className="w-1.5 h-1.5 rounded-full bg-[#f87171] flex-shrink-0" />
             <p className="text-[12px] text-[#f87171]">{state.error}</p>
@@ -294,6 +298,13 @@ export default function NewProjectPage() {
           </a>
         </div>
       </form>
+
+      <UpgradeModal 
+        isOpen={showUpgrade} 
+        onClose={() => setShowUpgrade(false)} 
+        feature="Project Limit Reached" 
+        description="The Starter plan is limited to 1 repository. Upgrade to Pro to ship continuously with unlimited repositories and advanced security coverage."
+      />
     </div>
   )
 }

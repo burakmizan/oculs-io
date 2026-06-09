@@ -110,6 +110,8 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash"),
   /** Set when the user completes the onboarding wizard; null = not onboarded. */
   onboardingCompletedAt: timestamp("onboarding_completed_at", { mode: "date" }),
+  // Plan yönetimi: starter, pro, enterprise
+  plan: text("plan").default("starter").notNull(),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 })
 
@@ -394,3 +396,28 @@ export type Scan = typeof scans.$inferSelect
 export type NewScan = typeof scans.$inferInsert
 export type Vulnerability = typeof vulnerabilities.$inferSelect
 export type NewVulnerability = typeof vulnerabilities.$inferInsert
+
+
+export const teams = pgTable("teams", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const teamMembers = pgTable("team_members", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }).notNull(),
+  userId: text("user_id").notNull(),
+  role: text("role").default("member").notNull(), // owner, member
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const teamInvites = pgTable("team_invites", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }).notNull(),
+  email: text("email").notNull(),
+  token: text("token").notNull().unique(),
+  status: text("status").default("pending").notNull(), // pending, accepted
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+});

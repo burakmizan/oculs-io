@@ -184,8 +184,8 @@ export default async function DashboardPage() {
             <div className="h-px bg-white/[0.06]" />
 
             {/* Usage bars */}
-            <UsageBar used={stats.scans} total={50} label="Scans / month" />
-            <UsageBar used={stats.projects} total={5} label="Projects" />
+            <UsageBar used={stats.scans} total={3} label="Scans / month" />
+            <UsageBar used={stats.projects} total={1} label="Projects" />
             <UsageBar used={stats.openVulnerabilities} total={500} label="Active findings" />
 
             <div className="h-px bg-white/[0.06]" />
