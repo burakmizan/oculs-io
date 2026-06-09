@@ -31,6 +31,9 @@ export const scanToolEnum = pgEnum("scan_tool", [
   "gosec",
   "trivy",
   "gitleaks",
+  "eslint_security",
+  "npm_audit",
+  "detect_secrets",
   // ── DAST / Infrastructure ─────────────────────────────
   "owasp_zap",
   "nuclei",

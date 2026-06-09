@@ -21,26 +21,11 @@ export type {
 /* ── Enum mirrors ──────────────────────────────────────────────────── */
 
 export type ScanTool =
-  | "semgrep"
-  | "codeql"
-  | "sonarscanner"
-  | "horusec"
-  | "bearer"
-  | "nodejsscan"
-  | "bandit"
-  | "gosec"
-  | "trivy"
-  | "gitleaks"
-  | "owasp_zap"
-  | "nuclei"
-  | "nmap_vulners"
-  | "nikto"
-  | "wapiti"
-  | "sqlmap"
-  | "arachni"
-  | "dirsearch"
-  | "testssl"
-  | "wpscan"
+  | "semgrep" | "codeql" | "sonarscanner" | "horusec" | "bearer"
+  | "nodejsscan" | "bandit" | "gosec" | "trivy" | "gitleaks"
+  | "eslint_security" | "npm_audit" | "detect_secrets"
+  | "owasp_zap" | "nuclei" | "nmap_vulners" | "nikto" | "wapiti"
+  | "sqlmap" | "arachni" | "dirsearch" | "testssl" | "wpscan"
 
 export type ToolCategory = "sast" | "dast" | "secrets" | "infra"
 

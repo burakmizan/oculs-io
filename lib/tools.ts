@@ -26,7 +26,10 @@ export const TOOLS: readonly ToolSpec[] = [
   { id: "bandit",       label: "Bandit",        category: "sast",    blurb: "Security linter for Python codebases." },
   { id: "gosec",        label: "Gosec",         category: "sast",    blurb: "Go source security analyzer." },
   { id: "trivy",        label: "Trivy",         category: "infra",   blurb: "Dependency, container & IaC misconfiguration scanner." },
-  { id: "gitleaks",     label: "Gitleaks",      category: "secrets", blurb: "Detects hardcoded secrets and credentials in git history." },
+  { id: "gitleaks",       label: "Gitleaks",        category: "secrets", blurb: "Detects hardcoded secrets and credentials in git history." },
+  { id: "eslint_security", label: "ESLint Security", category: "sast",    blurb: "Detects injection and security anti-patterns in JS/TS via eslint-plugin-security." },
+  { id: "npm_audit",       label: "npm audit",       category: "sast",    blurb: "Finds known CVEs in npm dependencies using the npm advisory database." },
+  { id: "detect_secrets",  label: "detect-secrets",  category: "secrets", blurb: "Finds custom API key patterns and secrets missed by Gitleaks." },
 
   // ── DAST / Infrastructure — runtime & network testing ───────────────
   { id: "owasp_zap",    label: "OWASP ZAP",     category: "dast",    blurb: "Full active/passive web application attack proxy." },

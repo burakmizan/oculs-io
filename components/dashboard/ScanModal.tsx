@@ -11,7 +11,7 @@ import { UpgradeModal } from "@/components/dashboard/UpgradeModal"
 const INIT: ScanActionState = {}
 
 // Tool groups — no overlaps
-const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy"]
+const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy", "eslint_security", "npm_audit", "detect_secrets"]
 const DAST_TOOLS: ScanTool[] = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"]
 
 interface Props {
@@ -34,7 +34,7 @@ export function ScanModal({ project }: Props) {
 
   // Per-tool selection
   const [selectedSast, setSelectedSast] = useState<Set<ScanTool>>(
-    new Set(["semgrep", "horusec", "gitleaks", "trivy"])
+    new Set(["semgrep", "horusec", "gitleaks", "trivy", "eslint_security", "npm_audit", "detect_secrets"])
   )
   const [selectedDast, setSelectedDast] = useState<Set<ScanTool>>(
     new Set(["owasp_zap", "nuclei"])
@@ -231,7 +231,10 @@ export function ScanModal({ project }: Props) {
                             bandit: "Scans Python codebases for common security issues.",
                             gosec: "Inspects Go source code for security standards compliance.",
                             gitleaks: "Detects hardcoded secrets, passwords, and API tokens.",
-                            trivy: "Scans project dependencies and packages for known CVEs."
+                            trivy: "Scans project dependencies and packages for known CVEs.",
+                            eslint_security: "Detects injection and unsafe patterns in JS/TS via security plugins.",
+                            npm_audit: "Finds known CVEs in npm dependencies (npm advisory database).",
+                            detect_secrets: "Finds API keys and custom secret patterns missed by Gitleaks.",
                           }
                           const desc = sastDescriptions[id] || t.blurb
 
