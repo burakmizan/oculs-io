@@ -155,16 +155,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        id: gitleaks
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-
-      - name: Export JSON report
-        if: always()
+      - name: Run Gitleaks & Export JSON
         run: |
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
@@ -172,6 +163,8 @@ jobs:
             --report-format json \
             --report-path /repo/gitleaks-results.json \
             --no-git || true
+          # Python scriptin okuyabilmesi için dosya sahipliğini root'tan runner'a alıyoruz
+          sudo chown -R $USER:$USER gitleaks-results.json || true
 
       - name: POST findings
         if: always()
@@ -479,18 +472,9 @@ jobs:
 
       - name: Run NodeJsScan
         run: |
-          pip install nodejsscan --quiet
-          # Run and output JSON — nodejsscan outputs to stdout with -o flag
-          python3 -c "
-          import subprocess, json, sys
-          result = subprocess.run(
-              ['nodejsscan', '-d', '.', '-o', 'nodejsscan-results.json'],
-              capture_output=True, text=True
-          )
-          print(result.stdout[:500])
-          print(result.stderr[:500], file=sys.stderr)
-          " || true
-          # Ensure file exists
+          # Ubuntu 24.04 PEP 668 engeline takılmamak için pipx kullanıyoruz
+          pipx install nodejsscan
+          nodejsscan -d . -o nodejsscan-results.json || true
           ls nodejsscan-results.json 2>/dev/null || echo '{}' > nodejsscan-results.json
 
       - name: POST findings
@@ -600,9 +584,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+          build-mode: none
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
@@ -820,18 +802,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Nuclei
+      - name: Run Nuclei via Docker
         run: |
-          go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-          echo "$HOME/go/bin" >> $GITHUB_PATH
-
-      - name: Run Nuclei
-        run: |
-          nuclei -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
+          docker run --rm -v "$PWD:/src" projectdiscovery/nuclei:latest \
+            -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
             -severity critical,high,medium,low \
-            -json-export nuclei-results.json \
+            -json-export /src/nuclei-results.json \
             -timeout 30 \
             -no-interactsh || true
+          # Docker çıktısını okunabilir yapıyoruz
+          sudo chown -R $USER:$USER nuclei-results.json || true
 
       - name: POST findings
         if: always()
@@ -959,7 +939,7 @@ jobs:
     steps:
       - name: Run Dirsearch
         run: |
-          pip install dirsearch --quiet
+          pipx install dirsearch
           dirsearch -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
             -o dirsearch-results.json \
             --format json \
@@ -1104,7 +1084,7 @@ jobs:
       # ── Wapiti ──────────────────────────────────────────
       - name: Run Wapiti
         run: |
-          pip install wapiti3 --quiet
+          pipx install wapiti3
           wapiti -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
             -f json \
             -o wapiti-results.json \
