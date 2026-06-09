@@ -46,6 +46,17 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
   const stage = STAGES[stageIdx]!
   const pct = stage.pct
   const isDone = pct === 100
+
+  // Open report page in new tab when scan reaches 100%
+  const [reportOpened, setReportOpened] = useState(false)
+  useEffect(() => {
+    if (isDone && !reportOpened) {
+      setReportOpened(true)
+      setTimeout(() => {
+        window.open(`/dashboard/report/${scanId}`, "_blank")
+      }, 1500)
+    }
+  }, [isDone, reportOpened, scanId])
   const estTotal = Math.round((toolCount * 45) / 60) // rough estimate in minutes
   const estRemain = isDone ? 0 : Math.max(0, estTotal * 60 - elapsed)
   const remMin = Math.floor(estRemain / 60)

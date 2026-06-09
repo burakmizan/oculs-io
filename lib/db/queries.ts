@@ -311,3 +311,67 @@ export async function getVulnerabilities(
     .orderBy(desc(vulnerabilities.createdAt))
     .limit(limit)
 }
+
+export interface ScanListRow {
+  id: string
+  repoFullName: string
+  status: string
+  vulnerabilitiesCount: number
+  createdAt: Date
+  completedAt: Date | null
+  tools: ScanTool[]
+}
+
+export async function getUserScans(
+  userId: string,
+  limit = 20,
+): Promise<ScanListRow[]> {
+  return db
+    .select({
+      id: scans.id,
+      repoFullName: projects.repoFullName,
+      status: scans.status,
+      vulnerabilitiesCount: scans.vulnerabilitiesCount,
+      createdAt: scans.createdAt,
+      completedAt: scans.completedAt,
+      tools: scans.tools,
+    })
+    .from(scans)
+    .innerJoin(projects, eq(scans.projectId, projects.id))
+    .where(eq(scans.userId, userId))
+    .orderBy(desc(scans.createdAt))
+    .limit(limit)
+}
+
+export async function getVulnerabilitiesByScan(
+  scanId: string,
+  userId: string,
+): Promise<VulnerabilityRow[]> {
+  return db
+    .select({
+      id: vulnerabilities.id,
+      title: vulnerabilities.title,
+      severity: vulnerabilities.severity,
+      tool: vulnerabilities.tool,
+      filePath: vulnerabilities.filePath,
+      targetUrl: vulnerabilities.targetUrl,
+      lineStart: vulnerabilities.lineStart,
+      cweId: vulnerabilities.cweId,
+      owaspCategory: vulnerabilities.owaspCategory,
+      remediation: vulnerabilities.remediation,
+      aiFixPatch: vulnerabilities.aiFixPatch,
+      status: vulnerabilities.status,
+      createdAt: vulnerabilities.createdAt,
+      repoFullName: projects.repoFullName,
+      scanId: vulnerabilities.scanId,
+    })
+    .from(vulnerabilities)
+    .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))
+    .where(
+      and(
+        eq(vulnerabilities.scanId, scanId),
+        eq(vulnerabilities.userId, userId),
+      ),
+    )
+    .orderBy(desc(vulnerabilities.createdAt))
+}

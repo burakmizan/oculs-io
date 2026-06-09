@@ -216,46 +216,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { projectId, userId } = scanRow
 
-  // ── 8. AI triage all findings ────────────────────────────────────────────
-  const enableAutoFix = process.env.ENABLE_AI_AUTOFIX === "true"
+  // ── 8. AI triage all findings (Gemini — runs after all tools complete) ───
+  // analyzeFindings uses original tool severity as fallback if Gemini fails.
   let triaged = findings.length > 0 ? await analyzeFindings(findings) : []
 
-  // ── 9. Generate auto-fix patches (if enabled, critical/high only) ────────
-  if (enableAutoFix && triaged.length > 0) {
-    const autoFixTargets = triaged.filter(
-      (f) => f.triageSeverity === "critical" || f.triageSeverity === "high",
-    )
-    await Promise.allSettled(
-      autoFixTargets.map(async (f, idx) => {
-        try {
-          const fix = await generateAutoFix(f)
-          const originalIdx = triaged.indexOf(f)
-          triaged[originalIdx] = {
-            ...triaged[originalIdx],
-            // Attach fix data inline so the insert step can use it
-            ...(fix.patch ? { _fixPatch: fix.patch, _fixExplanation: fix.explanation, _fixModel: fix.model } : {}),
-          } as typeof f & { _fixPatch?: string; _fixExplanation?: string; _fixModel?: string }
-        } catch (err) {
-          console.error(`[webhook] Auto-fix failed for finding ${idx}:`, err)
-        }
-      }),
-    )
-  }
+  // Auto-fix and report generation moved to dedicated report page
+  // to avoid Gemini rate limits during bulk webhook ingestion.
 
-  // ── 10. Generate scan report ──────────────────────────────────────────────
-  let report: Awaited<ReturnType<typeof generateReport>> | null = null
-  try {
-    report = await generateReport(repository, branch, triaged)
-  } catch (err) {
-    console.error("[webhook] Report generation failed:", err)
-  }
-
-  // ── 11. Build summary counts ──────────────────────────────────────────────
+  // ── 9. Build summary counts ──────────────────────────────────────────────
   const summary: Record<SeverityLevel, number> = {
     critical: 0, high: 0, medium: 0, low: 0, info: 0,
   }
   for (const f of triaged) summary[f.triageSeverity]++
-  const riskScore = report?.riskScore ?? Math.min(
+  const riskScore = Math.min(
     100,
     Object.entries(summary).reduce(
       (acc, [sev, cnt]) => acc + SEVERITY_WEIGHTS[sev as SeverityLevel] * cnt,
@@ -263,7 +236,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ),
   )
 
-  // ── 12. Bulk-insert vulnerabilities ──────────────────────────────────────
+  // ── 10. Bulk-insert vulnerabilities ─────────────────────────────────────
   if (triaged.length > 0) {
     const rows = triaged.map((f) => {
       // Cast to access optional fix fields attached in step 9
@@ -327,7 +300,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // ── 13. Finalise scan row ─────────────────────────────────────────────────
+  // ── 11. Finalise scan row ─────────────────────────────────────────────────
   try {
     await db
       .update(scans)
@@ -345,7 +318,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.error("[webhook] Final scan update failed:", err)
   }
 
-  // ── 14. Revalidate dashboard RSC cache ────────────────────────────────────
+  // ── 12. Revalidate dashboard RSC cache ────────────────────────────────────
   revalidatePath("/dashboard")
 
   return NextResponse.json({

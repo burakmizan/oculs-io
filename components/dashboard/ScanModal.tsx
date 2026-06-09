@@ -10,7 +10,7 @@ import { ScanProgress } from "@/components/dashboard/ScanProgress"
 const INIT: ScanActionState = {}
 
 // Tool groups — no overlaps
-const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec"]
+const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy", "nmap_vulners"]
 const SECRETS_TOOLS: ScanTool[] = ["gitleaks"]
 const INFRA_TOOLS: ScanTool[] = ["trivy", "nmap_vulners"]
 const DAST_TOOLS: ScanTool[] = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan"]
@@ -35,7 +35,7 @@ export function ScanModal({ project }: Props) {
 
   // Per-tool selection
   const [selectedSast, setSelectedSast] = useState<Set<ScanTool>>(
-    new Set(["semgrep", "horusec"])
+    new Set(["semgrep", "horusec", "gitleaks", "trivy"])
   )
   const [selectedDast, setSelectedDast] = useState<Set<ScanTool>>(
     new Set(["owasp_zap", "nuclei"])
@@ -74,9 +74,9 @@ export function ScanModal({ project }: Props) {
     })
   }
 
-  // Build final tool list — always include secrets + infra with SAST
+  // Build final tool list — only user-selected tools
   const allSelected: ScanTool[] = [
-    ...(sastEnabled ? [...selectedSast, ...SECRETS_TOOLS, ...INFRA_TOOLS] : []),
+    ...(sastEnabled ? [...selectedSast] : []),
     ...(dastEnabled && dastUrl ? [...selectedDast] : []),
   ]
 
@@ -188,23 +188,6 @@ export function ScanModal({ project }: Props) {
 
                   {sastEnabled && (
                     <>
-                      {/* Always-on tools */}
-                      <div className="flex gap-1.5 flex-wrap">
-                        {[...SECRETS_TOOLS, ...INFRA_TOOLS].map(id => {
-                          const t = TOOLS.find(x => x.id === id)
-                          if (!t) return null
-                          return (
-                            <span key={`always-${id}`}
-                              className="flex items-center gap-1.5 h-7 px-2.5 rounded-[6px]
-                                         border border-white/10 bg-white/[0.03] opacity-60"
-                              title="Always included">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80]" />
-                              <span className="text-[11px] font-mono text-[#a1a1aa]">{t.label}</span>
-                            </span>
-                          )
-                        })}
-                        <span className="text-[10px] font-mono text-[#333333] self-center ml-1">always on</span>
-                      </div>
 
                       {/* Selectable SAST tools */}
                       <div className="grid grid-cols-2 gap-1.5">
