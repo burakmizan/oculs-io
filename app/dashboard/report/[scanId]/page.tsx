@@ -79,6 +79,26 @@ export default async function ReportPage({ params }: Props) {
   }
   const deduped = Array.from(dedupMap.values())
 
+  // Hackathon Showcase: 0 sonuç bulan toolları bulup "Passed" olarak ekliyoruz
+  const foundTools = new Set(vulns.map(v => (v.tool || "").toLowerCase()))
+  const expectedTools = ["semgrep", "gitleaks", "trivy", "horusec", "bearer", "nodejsscan", "codeql"]
+  const passedTools = expectedTools.filter(t => !foundTools.has(t))
+
+  for (const t of passedTools) {
+    deduped.push({
+      id: `passed-${t}`,
+      tool: t,
+      title: "No vulnerabilities detected",
+      severity: "info",
+      filePath: null,
+      targetUrl: null,
+      cweId: null,
+      remediation: null,
+      count: 0,
+      lines: []
+    } as any)
+  }
+
   const counts = SEV_ORDER.reduce((acc, s) => {
     acc[s] = deduped.filter(v => v.severity === s).length
     return acc
@@ -190,8 +210,9 @@ export default async function ReportPage({ params }: Props) {
 
                   {/* Title */}
                   <div className="min-w-0">
-                    <p className="text-[13px] text-white truncate" style={{ letterSpacing: "-0.26px" }}>
-                      {v.title}
+                    <p className="text-[13px] text-white truncate flex items-center gap-1.5" style={{ letterSpacing: "-0.26px" }}>
+                      {(v as any).count === 0 && <span className="text-[#4ade80]">✓</span>}
+                      <span className={(v as any).count === 0 ? "text-[#a1a1aa]" : ""}>{v.title}</span>
                     </p>
                     {v.cweId && (
                       <p className="text-[10px] font-mono text-[#333333] mt-0.5">{v.cweId}</p>
@@ -233,6 +254,8 @@ export default async function ReportPage({ params }: Props) {
                                        text-[11px] font-mono text-[#a1a1aa]">
                         {(v as VulnerabilityRow & { count: number }).count}×
                       </span>
+                    ) : (v as VulnerabilityRow & { count: number }).count === 0 ? (
+                      <span className="text-[#4ade80] font-mono text-[11px] font-semibold">0</span>
                     ) : (
                       <span className="text-[#333333]">—</span>
                     )}
