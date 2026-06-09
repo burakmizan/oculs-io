@@ -904,17 +904,7 @@ jobs:
           EOF
         env:
           OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
-          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }} -f json -o bandit-results.json || true
-          ls bandit-results.json 2>/dev/null || echo '{}' > bandit-results.json
-      - name: POST findings
-        if: always()
-        run: |
-          python3 - <<'EOF'
-          import json, os, hmac, hashlib, urllib.request
-          try:
-              with open("bandit-results.json") as f:
-                  data = json.load(f)
-          except: data = {}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
           findings = []
           for r in data.get("results", []):
               findings.append({

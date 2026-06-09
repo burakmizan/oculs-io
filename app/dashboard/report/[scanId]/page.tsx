@@ -87,7 +87,13 @@ export default async function ReportPage({ params }: Props) {
 
   const foundTools = new Set(vulns.map(v => (v.tool || "").toLowerCase()))
 
-  const expectedTools = ["semgrep", "gitleaks", "trivy", "horusec", "bearer", "nodejsscan", "codeql", "bandit", "gosec", "sonarscanner", "nmap_vulners"]
+  const sastTools = ["semgrep", "gitleaks", "trivy", "horusec", "bearer", "nodejsscan", "codeql", "bandit", "gosec", "sonarscanner"]
+  const dastTools = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"]
+
+  // Determine if this was a DAST scan
+  const isDast = isDastScan || vulns.some(v => dastTools.includes((v.tool || "").toLowerCase()));
+
+  const expectedTools = isDast ? [...sastTools, ...dastTools] : sastTools
   const passedTools = expectedTools.filter(t => !foundTools.has(t))
 
   for (const t of passedTools) {
