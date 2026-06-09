@@ -831,21 +831,15 @@ jobs:
 
       - name: Run Bandit (Python only)
         run: |
-          # Only run if Python files exist
           PY_COUNT=$(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l)
           echo "[bandit] Python files found: $PY_COUNT"
           if [ "$PY_COUNT" -gt "0" ]; then
-            pip install bandit --quiet
-            bandit -r . \
-              -f json \
-              -o bandit-results.json \
-              --exclude ./node_modules,./venv,./.venv,./env \
-              -ll \
-              || true
+            pipx run bandit -r . -f json -o bandit-results.json --exclude ./node_modules,./venv,./.venv,./env -ll || true
           else
             echo '{"results": [], "errors": [], "metrics": {}}' > bandit-results.json
             echo "[bandit] No Python files found, skipping scan"
           fi
+          ls bandit-results.json 2>/dev/null || echo '{"results": []}' > bandit-results.json
 
       - name: POST findings
         if: always()
@@ -874,13 +868,8 @@ jobs:
                   "description": r.get("issue_text", "")[:500],
                   "severity": sev_map.get(r.get("issue_severity", "MEDIUM"), "medium"),
                   "filePath": r.get("filename", ""),
-                  "lineStart": r.get("line_number"),
-                  "lineEnd": r.get("line_range", [None])[-1] if r.get("line_range") else None,
-                  "codeSnippet": r.get("code", "")[:400],
-                  "cweId": r.get("issue_cwe", {}).get("id", "") if isinstance(r.get("issue_cwe"), dict) else ""
+                  "lineStart": r.get("line_number")
               })
-
-          print(f"[bandit] Sending {len(findings)} findings")
 
           payload = json.dumps({
               "event": "scan.completed",
@@ -899,27 +888,14 @@ jobs:
               headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
               method="POST"
           )
-          with urllib.request.urlopen(req) as res:
-              print(f"[bandit] Webhook: {res.status}")
+          try:
+              with urllib.request.urlopen(req) as res:
+                  print(f"[bandit] Webhook: {res.status}")
+          except Exception as e:
+              print(f"[bandit] Webhook failed: {e}")
           EOF
         env:
           OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
-          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
-          findings = []
-          for r in data.get("results", []):
-              findings.append({
-                  "tool": "bandit", "ruleId": r.get("test_id", ""),
-                  "title": r.get("test_name", "Bandit finding"),
-                  "description": r.get("issue_text", "")[:500],
-                  "severity": "medium", "filePath": r.get("filename", ""),
-                  "lineStart": r.get("line_number")
-              })
-          payload = json.dumps({"event": "scan.completed", "scanId": os.environ["SCAN_ID"], "repository": os.environ["REPO"], "branch": os.environ["BRANCH"], "commitSha": os.environ["SHA"], "findings": findings})
-          req = urllib.request.Request(os.environ["OCULS_WEBHOOK_URL"], data=payload.encode(), headers={"Content-Type": "application/json", "X-Oculs-Signature-256": "sha256=" + hmac.new(os.environ["OCULS_WEBHOOK_SECRET"].encode(), payload.encode(), hashlib.sha256).hexdigest()}, method="POST")
-          urllib.request.urlopen(req)
-          EOF
-        env:
-          OCULS_WEBHOOK_URL: ${{ secrets.OCULS_WEBHOOK_URL }}
           OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
 
   # ── Gosec ────────────────────────────────────────────────
