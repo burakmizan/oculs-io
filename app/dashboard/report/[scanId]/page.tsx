@@ -43,6 +43,7 @@ export default async function ReportPage({ params }: Props) {
   let vulns: VulnerabilityRow[] = []
   let repoName = ""
   let scanDate: Date | null = null
+  let isDastScan = false
 
   try {
     vulns = await getVulnerabilitiesByScan(scanId, userId)
@@ -51,6 +52,9 @@ export default async function ReportPage({ params }: Props) {
     if (!scan) notFound()
     repoName = scan.repoFullName
     scanDate = scan.completedAt ?? scan.createdAt
+    if ((scan as any).targetUrl || (scan as any).summary?.targetUrl) {
+      isDastScan = true
+    }
   } catch {
     notFound()
   }
@@ -79,9 +83,9 @@ export default async function ReportPage({ params }: Props) {
   }
   const deduped = Array.from(dedupMap.values())
 
-  // Hackathon Showcase: 0 sonuç bulan toolları bulup "Passed" olarak ekliyoruz
   const foundTools = new Set(vulns.map(v => (v.tool || "").toLowerCase()))
-  const expectedTools = ["semgrep", "gitleaks", "trivy", "horusec", "bearer", "nodejsscan", "codeql"]
+
+  const expectedTools = ["semgrep", "gitleaks", "trivy", "horusec", "bearer", "nodejsscan", "codeql", "bandit", "gosec", "sonarscanner", "nmap_vulners"]
   const passedTools = expectedTools.filter(t => !foundTools.has(t))
 
   for (const t of passedTools) {

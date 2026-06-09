@@ -10,8 +10,8 @@ import { ScanProgress } from "@/components/dashboard/ScanProgress"
 const INIT: ScanActionState = {}
 
 // Tool groups — no overlaps
-const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy", "nmap_vulners"]
-const DAST_TOOLS: ScanTool[] = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan"]
+const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy"]
+const DAST_TOOLS: ScanTool[] = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"]
 
 interface Props {
   project: {
@@ -167,11 +167,22 @@ export function ScanModal({ project }: Props) {
                 {/* ── SAST ── */}
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[13px] font-semibold text-white" style={{ letterSpacing: "-0.26px" }}>
-                        SAST Analysis
-                      </p>
-                      <p className="text-[11px] text-[#555555] mt-0.5">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-3">
+                        <p className="text-[13px] font-semibold text-white" style={{ letterSpacing: "-0.26px" }}>
+                          SAST Analysis
+                        </p>
+                        <label className="flex items-center gap-1.5 cursor-pointer group select-none">
+                          <input type="checkbox" className="sr-only"
+                            checked={SAST_TOOLS.every(id => selectedSast.has(id))}
+                            onChange={(e) => setSelectedSast(e.target.checked ? new Set(SAST_TOOLS) : new Set())} 
+                          />
+                          <span className="text-[10px] font-medium text-[#4ade80] bg-[#4ade80]/10 px-2 py-0.5 rounded-[4px] transition-colors group-hover:bg-[#4ade80]/20">
+                            Select All (Recommended)
+                          </span>
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-[#555555]">
                         Static source + secrets + dependency scanning
                       </p>
                     </div>
@@ -186,30 +197,44 @@ export function ScanModal({ project }: Props) {
 
                   {sastEnabled && (
                     <>
-
                       {/* Selectable SAST tools */}
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="flex flex-col gap-1.5">
                         {SAST_TOOLS.map(id => {
                           const t = TOOLS.find(x => x.id === id)
                           if (!t) return null
                           const isOn = selectedSast.has(id)
+                          
+                          const sastDescriptions: Record<string, string> = {
+                            semgrep: "Identifies insecure functions and bad practices in source code.",
+                            codeql: "Detects logical data-flow vulnerabilities and security flaws.",
+                            sonarscanner: "Evaluates overall code quality and structural vulnerabilities.",
+                            horusec: "Aggregates multi-language static analysis for common flaws.",
+                            bearer: "Audits privacy risks and sensitive data leakage in logs.",
+                            nodejsscan: "Analyzes Node.js architectures for backend vulnerabilities.",
+                            bandit: "Scans Python codebases for common security issues.",
+                            gosec: "Inspects Go source code for security standards compliance.",
+                            gitleaks: "Detects hardcoded secrets, passwords, and API tokens.",
+                            trivy: "Scans project dependencies and packages for known CVEs."
+                          }
+                          const desc = sastDescriptions[id] || t.blurb
+
                           return (
                             <label key={`sast-${id}`}
-                              className={`flex items-center gap-2 px-2.5 py-2 rounded-[7px] border cursor-pointer transition-colors
-                                ${isOn ? "border-white/20 bg-white/[0.05]" : "border-white/[0.07] hover:bg-white/[0.02]"}`}>
+                              className={`flex items-center gap-3 px-3 py-2.5 rounded-[9px] border cursor-pointer transition-all
+                                ${isOn ? "border-white/20 bg-white/[0.04]" : "border-white/[0.04] bg-white/[0.01] hover:bg-white/[0.02]"}`}>
                               <input type="checkbox" className="sr-only"
                                 checked={isOn} onChange={() => toggleSast(id)} />
-                              <span className={`w-3.5 h-3.5 rounded-[3px] border flex items-center justify-center flex-shrink-0
-                                ${isOn ? "bg-white border-white" : "border-white/20"}`}>
+                              <span className={`w-4 h-4 rounded-[4px] border flex items-center justify-center flex-shrink-0 transition-colors
+                                ${isOn ? "bg-white border-white" : "border-white/20 bg-black"}`}>
                                 {isOn && (
-                                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                                    <path d="M1 4l2 2 4-4" stroke="black" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                    <path d="M2 5l2 2 4-4" stroke="black" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                                   </svg>
                                 )}
                               </span>
-                              <div className="min-w-0">
-                                <span className="text-[11px] font-mono text-white truncate block">{t.label}</span>
-                                <span className="text-[10px] text-[#444444] truncate block">{t.blurb.slice(0, 40)}</span>
+                              <div className="min-w-0 flex-1">
+                                <span className="text-[12px] text-zinc-200 block leading-snug">{desc}</span>
+                                <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 block mt-0.5">{t.label}</span>
                               </div>
                             </label>
                           )
@@ -224,11 +249,22 @@ export function ScanModal({ project }: Props) {
                 {/* ── DAST ── */}
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[13px] font-semibold text-white" style={{ letterSpacing: "-0.26px" }}>
-                        DAST Analysis
-                      </p>
-                      <p className="text-[11px] text-[#555555] mt-0.5">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-3">
+                        <p className="text-[13px] font-semibold text-white" style={{ letterSpacing: "-0.26px" }}>
+                          DAST Analysis
+                        </p>
+                        <label className="flex items-center gap-1.5 cursor-pointer group select-none">
+                          <input type="checkbox" className="sr-only"
+                            checked={DAST_TOOLS.every(id => selectedDast.has(id))}
+                            onChange={(e) => setSelectedDast(e.target.checked ? new Set(DAST_TOOLS) : new Set())} 
+                          />
+                          <span className="text-[10px] font-medium text-[#4ade80] bg-[#4ade80]/10 px-2 py-0.5 rounded-[4px] transition-colors group-hover:bg-[#4ade80]/20">
+                            Select All (Recommended)
+                          </span>
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-[#555555]">
                         Runtime web application scanning
                       </p>
                     </div>
@@ -261,28 +297,43 @@ export function ScanModal({ project }: Props) {
                       </div>
 
                       {/* DAST tools */}
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="flex flex-col gap-1.5">
                         {DAST_TOOLS.map(id => {
                           const t = TOOLS.find(x => x.id === id)
                           if (!t) return null
                           const isOn = selectedDast.has(id)
+
+                          const dastDescriptions: Record<string, string> = {
+                            owasp_zap: "Performs dynamic application security testing (DAST) on live endpoints.",
+                            nuclei: "Executes template-based vulnerability scanning on active targets.",
+                            nikto: "Detects dangerous files and server misconfigurations.",
+                            wapiti: "Fuzzes web forms to identify XSS, SQLi, and input validation flaws.",
+                            sqlmap: "Detects and exploits database injection vulnerabilities.",
+                            arachni: "Evaluates modern web applications for runtime vulnerabilities.",
+                            dirsearch: "Discovers hidden directories and exposed administrative paths.",
+                            testssl: "Analyzes SSL/TLS certificate encryption standards and leaks.",
+                            wpscan: "Identifies vulnerable plugins and themes in WordPress environments.",
+                            nmap_vulners: "Scans network infrastructure for open ports and associated CVEs."
+                          }
+                          const desc = dastDescriptions[id] || t.blurb
+
                           return (
                             <label key={`dast-${id}`}
-                              className={`flex items-center gap-2 px-2.5 py-2 rounded-[7px] border cursor-pointer transition-colors
-                                ${isOn ? "border-white/20 bg-white/[0.05]" : "border-white/[0.07] hover:bg-white/[0.02]"}`}>
+                              className={`flex items-center gap-3 px-3 py-2.5 rounded-[9px] border cursor-pointer transition-all
+                                ${isOn ? "border-white/20 bg-white/[0.04]" : "border-white/[0.04] bg-white/[0.01] hover:bg-white/[0.02]"}`}>
                               <input type="checkbox" className="sr-only"
                                 checked={isOn} onChange={() => toggleDast(id)} />
-                              <span className={`w-3.5 h-3.5 rounded-[3px] border flex items-center justify-center flex-shrink-0
-                                ${isOn ? "bg-white border-white" : "border-white/20"}`}>
+                              <span className={`w-4 h-4 rounded-[4px] border flex items-center justify-center flex-shrink-0 transition-colors
+                                ${isOn ? "bg-white border-white" : "border-white/20 bg-black"}`}>
                                 {isOn && (
-                                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                                    <path d="M1 4l2 2 4-4" stroke="black" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                    <path d="M2 5l2 2 4-4" stroke="black" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                                   </svg>
                                 )}
                               </span>
-                              <div className="min-w-0">
-                                <span className="text-[11px] font-mono text-white truncate block">{t.label}</span>
-                                <span className="text-[10px] text-[#444444] truncate block">{t.blurb.slice(0, 40)}</span>
+                              <div className="min-w-0 flex-1">
+                                <span className="text-[12px] text-zinc-200 block leading-snug">{desc}</span>
+                                <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 block mt-0.5">{t.label}</span>
                               </div>
                             </label>
                           )
