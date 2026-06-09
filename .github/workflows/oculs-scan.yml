@@ -36,6 +36,7 @@ on:
         default: ""
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SCAN_ID: ${{ github.event.inputs.scan_id }}
   REPO:    ${{ github.repository }}
   BRANCH:  ${{ github.ref_name }}
@@ -163,8 +164,7 @@ jobs:
             --report-format json \
             --report-path /repo/gitleaks-results.json \
             --no-git || true
-          # Python scriptin okuyabilmesi için dosya sahipliğini root'tan runner'a alıyoruz
-          sudo chown -R $USER:$USER gitleaks-results.json || true
+          sudo chmod 777 gitleaks-results.json || true
 
       - name: POST findings
         if: always()
@@ -472,9 +472,8 @@ jobs:
 
       - name: Run NodeJsScan
         run: |
-          # Ubuntu 24.04 PEP 668 engeline takılmamak için pipx kullanıyoruz
-          pipx install nodejsscan
-          nodejsscan -d . -o nodejsscan-results.json || true
+          # Use pipx to bypass Ubuntu 24.04 PEP 668 restriction
+          pipx run nodejsscan -d . -o nodejsscan-results.json || true
           ls nodejsscan-results.json 2>/dev/null || echo '{}' > nodejsscan-results.json
 
       - name: POST findings
@@ -581,13 +580,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           build-mode: none
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           output: codeql-results
           upload: false
