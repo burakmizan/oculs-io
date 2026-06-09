@@ -324,7 +324,7 @@ export interface ScanListRow {
 
 export async function getUserScans(
   userId: string,
-  limit = 20,
+  limit = 50,
 ): Promise<ScanListRow[]> {
   return db
     .select({

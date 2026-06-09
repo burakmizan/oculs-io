@@ -11,8 +11,6 @@ const INIT: ScanActionState = {}
 
 // Tool groups — no overlaps
 const SAST_TOOLS: ScanTool[] = ["semgrep", "codeql", "sonarscanner", "horusec", "bearer", "nodejsscan", "bandit", "gosec", "gitleaks", "trivy", "nmap_vulners"]
-const SECRETS_TOOLS: ScanTool[] = ["gitleaks"]
-const INFRA_TOOLS: ScanTool[] = ["trivy", "nmap_vulners"]
 const DAST_TOOLS: ScanTool[] = ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan"]
 
 interface Props {

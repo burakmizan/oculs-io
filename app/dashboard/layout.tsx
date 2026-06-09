@@ -4,6 +4,7 @@ import { auth } from "@/auth"
 import { hasCompletedOnboarding } from "@/lib/db/queries"
 import { Sidebar } from "@/components/dashboard/Sidebar"
 import { TopBar } from "@/components/dashboard/TopBar"
+import { PersistentScanProgress } from "@/components/dashboard/PersistentScanProgress"
 
 export const metadata: Metadata = {
   title: {
@@ -40,6 +41,7 @@ export default async function DashboardLayout({
         <main className="flex-1 overflow-auto bg-[#000000]">
           {children}
         </main>
+        <PersistentScanProgress />
       </div>
     </div>
   )

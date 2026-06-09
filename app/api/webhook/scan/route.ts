@@ -21,11 +21,7 @@ import { revalidatePath } from "next/cache"
 import { eq } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities } from "@/lib/db/schema"
-import {
-  analyzeFindings,
-  generateAutoFix,
-  generateReport,
-} from "@/lib/ai"
+import { analyzeFindings } from "@/lib/ai"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { WebhookPayload, SeverityLevel } from "@/types"
 
@@ -239,13 +235,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 10. Bulk-insert vulnerabilities ─────────────────────────────────────
   if (triaged.length > 0) {
     const rows = triaged.map((f) => {
-      // Cast to access optional fix fields attached in step 9
-      const withFix = f as typeof f & {
-        _fixPatch?: string
-        _fixExplanation?: string
-        _fixModel?: string
-      }
-
       // Resolve tool category from the catalog; default to "sast" if unknown
       const toolSpec = TOOLS_BY_ID[f.tool]
       const category = toolSpec?.category ?? "sast"
@@ -270,10 +259,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         targetUrl: f.targetUrl ?? null,
         codeSnippet: f.codeSnippet ?? null,
         remediation: f.remediation ?? null,
-        aiFixPatch: withFix._fixPatch ?? null,
-        aiFixExplanation: withFix._fixExplanation ?? null,
-        aiFixModel: withFix._fixModel ?? null,
-        fixStatus: withFix._fixPatch ? ("suggested" as const) : ("none" as const),
+        aiFixPatch: null,
+        aiFixExplanation: null,
+        aiFixModel: null,
+        fixStatus: "none" as const,
         references: f.references ?? null,
         fingerprint: f.fingerprint,
         raw: f as unknown as Record<string, unknown>,
