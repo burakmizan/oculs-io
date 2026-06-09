@@ -78,15 +78,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Semgrep
+      - name: Detect languages and run Semgrep
         id: scan
         run: |
+          # Detect project languages
+          HAS_JS=$(find . -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" | grep -v node_modules | head -1)
+          HAS_PY=$(find . -name "*.py" | grep -v node_modules | head -1)
+          HAS_GO=$(find . -name "*.go" | grep -v node_modules | head -1)
+          HAS_JAVA=$(find . -name "*.java" | grep -v node_modules | head -1)
+          HAS_PHP=$(find . -name "*.php" | grep -v node_modules | head -1)
+          HAS_RUBY=$(find . -name "*.rb" | grep -v node_modules | head -1)
+          HAS_RUST=$(find . -name "*.rs" | grep -v node_modules | head -1)
+          HAS_C=$(find . -name "*.c" -o -name "*.cpp" -o -name "*.h" | grep -v node_modules | head -1)
+
+          # Build config args based on detected languages
+          CONFIGS="--config auto --config p/security-audit --config p/secrets --config p/owasp-top-ten"
+
+          if [ -n "$HAS_JS" ]; then
+            CONFIGS="$CONFIGS --config p/javascript --config p/typescript --config p/nodejs --config p/react --config p/nextjs"
+          fi
+          if [ -n "$HAS_PY" ]; then
+            CONFIGS="$CONFIGS --config p/python --config p/django --config p/flask"
+          fi
+          if [ -n "$HAS_GO" ]; then
+            CONFIGS="$CONFIGS --config p/golang"
+          fi
+          if [ -n "$HAS_JAVA" ]; then
+            CONFIGS="$CONFIGS --config p/java --config p/spring"
+          fi
+          if [ -n "$HAS_PHP" ]; then
+            CONFIGS="$CONFIGS --config p/php"
+          fi
+          if [ -n "$HAS_RUBY" ]; then
+            CONFIGS="$CONFIGS --config p/ruby --config p/rails"
+          fi
+          if [ -n "$HAS_RUST" ]; then
+            CONFIGS="$CONFIGS --config p/rust"
+          fi
+          if [ -n "$HAS_C" ]; then
+            CONFIGS="$CONFIGS --config p/c"
+          fi
+
+          echo "[semgrep] Detected languages, running with configs: $CONFIGS"
+
           semgrep scan \
-            --config auto \
+            $CONFIGS \
             --json \
             --output semgrep-results.json \
-            --timeout 120 \
+            --timeout 180 \
+            --max-memory 2000 \
+            --exclude-rule "generic.secrets.security.detected-generic-secret.detected-generic-secret" \
             . || true
+
+          # Print finding count
+          python3 -c "
+          import json
+          try:
+              d = json.load(open('semgrep-results.json'))
+              print(f'[semgrep] Found {len(d.get(\"results\", []))} findings')
+          except: pass
+          " || true
 
       - name: Normalise & POST findings
         if: always()
@@ -297,10 +348,27 @@ jobs:
 
       - name: Run Horusec
         run: |
+          # Install Horusec binary directly (faster than install script)
+          HORUSEC_VERSION="v2.9.0-beta.3"
+          wget -q "https://github.com/ZupIT/horusec/releases/download/${HORUSEC_VERSION}/horusec_linux_amd64" \
+            -O /usr/local/bin/horusec && chmod +x /usr/local/bin/horusec || \
           curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash || true
-          horusec start -p . -o json -O horusec-results.json --disable-docker true -s="LOW" || true
-          # Fallback: try SARIF output if JSON empty
-          ls -la horusec-results.json 2>/dev/null || echo '{}' > horusec-results.json
+          # Run Horusec — disable docker tools (CI environment)
+          # -s LOW includes LOW severity findings too
+          horusec start \
+            -p . \
+            -o json \
+            -O horusec-results.json \
+            --disable-docker true \
+            --enable-git-history false \
+            -s="LOW" \
+            --timeout 180 \
+            --log-level error \
+            --ignore="**/node_modules/**,**/.next/**,**/dist/**" \
+            || true
+          # Ensure output file exists
+          ls horusec-results.json 2>/dev/null || echo '{"analysisVulnerabilities": []}' > horusec-results.json
+          echo "[horusec] Result file size: $(wc -c < horusec-results.json) bytes"
 
       - name: POST findings
         if: always()
@@ -472,9 +540,44 @@ jobs:
 
       - name: Run NodeJsScan
         run: |
-          # Use pipx to bypass Ubuntu 24.04 PEP 668 restriction
-          pipx run nodejsscan -d . -o nodejsscan-results.json || true
-          ls nodejsscan-results.json 2>/dev/null || echo '{}' > nodejsscan-results.json
+          # NodeJsScan — only meaningful for JS/TS/Node projects
+          JS_COUNT=$(find . -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" | grep -v node_modules | grep -v .next | wc -l)
+          echo "[nodejsscan] JS/TS files found: $JS_COUNT"
+          if [ "$JS_COUNT" -gt "0" ]; then
+            # Added break-system-packages to prevent CI crash on Ubuntu 24.04
+            pip install nodejsscan --quiet --break-system-packages || true
+            python3 -c "
+          import subprocess, json, sys, os
+          # Run nodejsscan
+          result = subprocess.run(
+              ['nodejsscan', '-d', '.', '-o', 'nodejsscan-results.json'],
+              capture_output=True, text=True, timeout=180
+          )
+          print('[nodejsscan] return code:', result.returncode)
+          if result.stdout:
+              print('[nodejsscan] stdout:', result.stdout[:500])
+          # Try alternate output paths
+          if not os.path.exists('nodejsscan-results.json'):
+              for f in ['output.json', 'results.json', 'report.json']:
+                  if os.path.exists(f):
+                      os.rename(f, 'nodejsscan-results.json')
+                      print(f'[nodejsscan] Renamed {f} to nodejsscan-results.json')
+                      break
+          # Validate JSON
+          if os.path.exists('nodejsscan-results.json'):
+              try:
+                  with open('nodejsscan-results.json') as f:
+                      d = json.load(f)
+                  total = sum(len(v) for v in d.values() if isinstance(v, list))
+                  print(f'[nodejsscan] Valid JSON, approximately {total} findings')
+              except Exception as e:
+                  print(f'[nodejsscan] JSON parse error: {e}')
+                  open('nodejsscan-results.json', 'w').write('{}')
+          " || true
+          else
+            echo "[nodejsscan] No JS/TS files, skipping"
+          fi
+          ls -la nodejsscan-results.json 2>/dev/null || echo '{}' > nodejsscan-results.json
 
       - name: POST findings
         if: always()
@@ -725,9 +828,83 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Run Bandit
+
+      - name: Run Bandit (Python only)
         run: |
-          pipx run bandit -r . -f json -o bandit-results.json || true
+          # Only run if Python files exist
+          PY_COUNT=$(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l)
+          echo "[bandit] Python files found: $PY_COUNT"
+          if [ "$PY_COUNT" -gt "0" ]; then
+            pip install bandit --quiet
+            bandit -r . \
+              -f json \
+              -o bandit-results.json \
+              --exclude ./node_modules,./venv,./.venv,./env \
+              -ll \
+              || true
+          else
+            echo '{"results": [], "errors": [], "metrics": {}}' > bandit-results.json
+            echo "[bandit] No Python files found, skipping scan"
+          fi
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request, re
+
+          scan_id = os.environ.get("SCAN_ID", "")
+          if not scan_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', scan_id):
+              print(f"[bandit] No valid SCAN_ID, skipping")
+              import sys; sys.exit(0)
+
+          try:
+              with open("bandit-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {"results": []}
+
+          sev_map = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low", "UNDEFINED": "info"}
+          findings = []
+          for r in data.get("results", []):
+              findings.append({
+                  "tool": "bandit",
+                  "ruleId": r.get("test_id", ""),
+                  "title": r.get("test_name", "Bandit finding"),
+                  "description": r.get("issue_text", "")[:500],
+                  "severity": sev_map.get(r.get("issue_severity", "MEDIUM"), "medium"),
+                  "filePath": r.get("filename", ""),
+                  "lineStart": r.get("line_number"),
+                  "lineEnd": r.get("line_range", [None])[-1] if r.get("line_range") else None,
+                  "codeSnippet": r.get("code", "")[:400],
+                  "cweId": r.get("issue_cwe", {}).get("id", "") if isinstance(r.get("issue_cwe"), dict) else ""
+              })
+
+          print(f"[bandit] Sending {len(findings)} findings")
+
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": scan_id,
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"[bandit] Webhook: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }} -f json -o bandit-results.json || true
           ls bandit-results.json 2>/dev/null || echo '{}' > bandit-results.json
       - name: POST findings
         if: always()
@@ -763,16 +940,29 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Run Gosec
+      - name: Run Gosec (Go only)
         run: |
-          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.20.0
-          $(go env GOPATH)/bin/gosec -fmt json -out gosec-results.json ./... || true
-          ls gosec-results.json 2>/dev/null || echo '{}' > gosec-results.json
+          # Only run if Go files exist
+          GO_COUNT=$(find . -name "*.go" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l)
+          echo "[gosec] Go files found: $GO_COUNT"
+          if [ "$GO_COUNT" -gt "0" ]; then
+            go install github.com/securego/gosec/v2/cmd/gosec@latest
+            gosec -fmt json -out gosec-results.json ./... || true
+          else
+            echo '{"Issues": [], "Stats": {"files": 0, "lines": 0, "nosec": 0, "found": 0}}' > gosec-results.json
+            echo "[gosec] No Go files found, skipping scan"
+          fi
       - name: POST findings
         if: always()
         run: |
           python3 - <<'EOF'
-          import json, os, hmac, hashlib, urllib.request
+          import json, os, hmac, hashlib, urllib.request, re
+          
+          scan_id = os.environ.get("SCAN_ID", "")
+          if not scan_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', scan_id):
+              print(f"[gosec] No valid SCAN_ID, skipping")
+              import sys; sys.exit(0)
+
           try:
               with open("gosec-results.json") as f:
                   data = json.load(f)
@@ -801,12 +991,63 @@ jobs:
     needs: notify-start
     continue-on-error: true
     steps:
-      - name: POST 0 findings (Requires external Sonar Server config)
+      - uses: actions/checkout@v4
+      
+      - name: Run SonarScanner (requires SONAR_TOKEN)
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "[sonarscanner] SONAR_TOKEN not set — skipping SonarCloud scan"
+            echo '[]' > sonarscanner-results.json
+            exit 0
+          fi
+          # Install sonar-scanner
+          wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+          unzip -q sonar-scanner-cli-5.0.1.3006-linux.zip
+          export PATH="$PWD/sonar-scanner-5.0.1.3006-linux/bin:$PATH"
+          # Auto-detect project language
+          if find . -name "*.js" -o -name "*.ts" | grep -v node_modules | head -1 | grep -q .; then
+            SONAR_LANG="js,ts"
+          elif find . -name "*.py" | head -1 | grep -q .; then
+            SONAR_LANG="py"
+          elif find . -name "*.java" | head -1 | grep -q .; then
+            SONAR_LANG="java"
+          else
+            SONAR_LANG=""
+          fi
+          sonar-scanner \
+            -Dsonar.projectKey="${REPO//\//_}" \
+            -Dsonar.sources=. \
+            -Dsonar.host.url="${SONAR_HOST_URL:-https://sonarcloud.io}" \
+            -Dsonar.token="$SONAR_TOKEN" \
+            -Dsonar.exclusions="**/node_modules/**,**/.git/**,**/dist/**,**/.next/**" \
+            ${SONAR_LANG:+-Dsonar.language=$SONAR_LANG} \
+            || true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: POST findings
+        if: always()
         run: |
           python3 - <<'EOF'
-          import json, os, hmac, hashlib, urllib.request
-          payload = json.dumps({"event": "scan.completed", "scanId": os.environ["SCAN_ID"], "repository": os.environ["REPO"], "branch": os.environ["BRANCH"], "commitSha": os.environ["SHA"], "findings": []})
-          req = urllib.request.Request(os.environ["OCULS_WEBHOOK_URL"], data=payload.encode(), headers={"Content-Type": "application/json", "X-Oculs-Signature-256": "sha256=" + hmac.new(os.environ["OCULS_WEBHOOK_SECRET"].encode(), payload.encode(), hashlib.sha256).hexdigest()}, method="POST")
+          import json, os, hmac, hashlib, urllib.request, re
+
+          scan_id = os.environ.get("SCAN_ID", "")
+          if not scan_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', scan_id):
+              print(f"[sonarscanner] No valid SCAN_ID, skipping")
+              import sys; sys.exit(0)
+
+          payload = json.dumps({"event": "scan.completed", "scanId": scan_id, "repository": os.environ["REPO"], "branch": os.environ["BRANCH"], "commitSha": os.environ["SHA"], "findings": []})
+          
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"], 
+              data=payload.encode(), 
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig}, 
+              method="POST"
+          )
           urllib.request.urlopen(req)
           EOF
         env:
