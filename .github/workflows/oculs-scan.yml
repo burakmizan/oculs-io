@@ -36,7 +36,7 @@ on:
         default: ""
 
 env:
-  SCAN_ID: ${{ github.event.inputs.scan_id || github.run_id }}
+  SCAN_ID: ${{ github.event.inputs.scan_id }}
   REPO:    ${{ github.repository }}
   BRANCH:  ${{ github.ref_name }}
   SHA:     ${{ github.sha }}
@@ -48,9 +48,15 @@ jobs:
   notify-start:
     name: Notify — scan.started
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: POST scan.started
         run: |
+          # Only POST if SCAN_ID is a valid UUID (workflow_dispatch from dashboard)
+          if ! echo "$SCAN_ID" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "SCAN_ID is not a valid UUID ('$SCAN_ID') — skipping webhook"
+            exit 0
+          fi
           curl -fsSL -X POST "${{ secrets.OCULS_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
             -H "X-Oculs-Signature-256: sha256=$(echo -n '{"event":"scan.started","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'"}' | openssl dgst -sha256 -hmac '${{ secrets.OCULS_WEBHOOK_SECRET }}' | awk '{print $2}')" \
@@ -698,7 +704,7 @@ jobs:
                           "lineStart": line_start,
                           "lineEnd": line_end,
                           "cweId": next(
-                              (t["id"] for t in rule.get("properties", {}).get("tags", [])
+                              (t for t in rule.get("properties", {}).get("tags", [])
                                if isinstance(t, str) and t.startswith("CWE-")),
                               ""
                           ) if isinstance(rule.get("properties", {}).get("tags"), list) else ""

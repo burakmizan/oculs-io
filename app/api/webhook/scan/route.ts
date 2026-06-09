@@ -21,9 +21,9 @@ import { revalidatePath } from "next/cache"
 import { eq, count } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities } from "@/lib/db/schema"
-import { analyzeFindings } from "@/lib/ai"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { WebhookPayload, SeverityLevel } from "@/types"
+import type { TriagedFinding } from "@/lib/ai"
 
 // ---------------------------------------------------------------------------
 // Runtime: Node.js (needs crypto + DB — NOT edge)
@@ -212,9 +212,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { projectId, userId } = scanRow
 
-  // ── 8. AI triage all findings (Gemini — runs after all tools complete) ───
-  // analyzeFindings uses original tool severity as fallback if Gemini fails.
-  let triaged = findings.length > 0 ? await analyzeFindings(findings) : []
+  // ── 8. Map raw findings to TriagedFinding format ─────────────────────────
+  // Gemini triage runs lazily on /report/[scanId] — no rate limit issues.
+  const triaged = findings.map(f => ({
+    ...f,
+    triageSeverity: f.severity as SeverityLevel,
+    triageReasoning: "",
+    cweId: f.cweId ?? "",
+    owaspCategory: f.owaspCategory ?? "",
+    cvssScore: f.cvssScore ?? "",
+    remediation: (f as any).remediation ?? "",
+    fingerprint: (() => {
+      const raw = `${f.tool}::${f.ruleId ?? ""}::${f.filePath ?? f.targetUrl ?? ""}::${f.lineStart ?? 0}`
+      let hash = 5381
+      for (let i = 0; i < raw.length; i++) {
+        hash = ((hash << 5) + hash) ^ raw.charCodeAt(i)
+        hash = hash >>> 0
+      }
+      return hash.toString(16).padStart(8, "0")
+    })(),
+  }))
 
   // Auto-fix and report generation moved to dedicated report page
   // to avoid Gemini rate limits during bulk webhook ingestion.
