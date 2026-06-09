@@ -298,8 +298,10 @@ jobs:
 
       - name: Run Horusec
         run: |
-          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash
-          horusec start -p . -o json -O horusec-results.json --disable-docker true || true
+          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash || true
+          horusec start -p . -o json -O horusec-results.json --disable-docker true -s="LOW" || true
+          # Fallback: try SARIF output if JSON empty
+          ls -la horusec-results.json 2>/dev/null || echo '{}' > horusec-results.json
 
       - name: POST findings
         if: always()
@@ -307,26 +309,64 @@ jobs:
           python3 - <<'EOF'
           import json, os, hmac, hashlib, urllib.request
 
-          try:
-              with open("horusec-results.json") as f:
-                  data = json.load(f)
-          except Exception:
-              data = {}
-
-          sev_map = {"CRITICAL":"critical","HIGH":"high","MEDIUM":"medium","LOW":"low","INFO":"info","NOSEC":"info","UNKNOWN":"info"}
           findings = []
-          for item in data.get("analysisVulnerabilities") or []:
-              v = item.get("vulnerabilities", {})
-              findings.append({
-                  "tool": "horusec",
-                  "ruleId": v.get("rule_id", ""),
-                  "title": v.get("details", "Horusec finding")[:120],
-                  "description": v.get("details", ""),
-                  "severity": sev_map.get(v.get("severity", "MEDIUM"), "medium"),
-                  "filePath": v.get("file", ""),
-                  "lineStart": int(v.get("line", 0)) if v.get("line") else None,
-                  "codeSnippet": v.get("code", "")[:400]
-              })
+          sev_map = {"CRITICAL":"critical","HIGH":"high","MEDIUM":"medium","LOW":"low","INFO":"info","NOSEC":"info","UNKNOWN":"info"}
+
+          # Try horusec JSON output
+          for path in ["horusec-results.json"]:
+              try:
+                  with open(path) as f:
+                      raw = f.read().strip()
+                  if not raw or raw == "{}":
+                      continue
+                  data = json.loads(raw)
+              except Exception as e:
+                  print(f"[horusec] Could not parse {path}: {e}")
+                  continue
+
+              # Handle both array and object formats
+              items = []
+              if isinstance(data, list):
+                  items = data
+              elif isinstance(data, dict):
+                  items = data.get("analysisVulnerabilities") or []
+
+              for item in items:
+                  # Handle nested or flat structure
+                  if isinstance(item, dict) and "vulnerabilities" in item:
+                      v = item["vulnerabilities"]
+                  elif isinstance(item, dict) and "severity" in item:
+                      v = item
+                  else:
+                      continue
+
+                  sev_raw = str(v.get("severity", "MEDIUM")).upper()
+                  title = v.get("details", v.get("title", v.get("description", "Horusec finding")))
+                  if title:
+                      title = str(title)[:120]
+                  else:
+                      title = "Horusec finding"
+
+                  line = v.get("line", v.get("lineNumber", 0))
+                  try:
+                      line_num = int(line) if line else None
+                  except (ValueError, TypeError):
+                      line_num = None
+
+                  file_path = v.get("file", v.get("filename", v.get("commitAuthor", "")))
+
+                  findings.append({
+                      "tool": "horusec",
+                      "ruleId": str(v.get("rule_id", v.get("securityTool", "horusec"))),
+                      "title": title,
+                      "description": str(v.get("details", v.get("description", "")))[:500],
+                      "severity": sev_map.get(sev_raw, "medium"),
+                      "filePath": str(file_path) if file_path else None,
+                      "lineStart": line_num,
+                      "codeSnippet": str(v.get("code", ""))[:400]
+                  })
+
+          print(f"[horusec] Found {len(findings)} findings")
 
           payload = json.dumps({
               "event": "scan.completed",
@@ -346,7 +386,7 @@ jobs:
               method="POST"
           )
           with urllib.request.urlopen(req) as res:
-              print(f"Webhook response: {res.status}")
+              print(f"[horusec] Webhook response: {res.status}")
           EOF
         env:
           OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
@@ -434,7 +474,18 @@ jobs:
       - name: Run NodeJsScan
         run: |
           pip install nodejsscan --quiet
-          nodejsscan -d . -o nodejsscan-results.json || true
+          # Run and output JSON — nodejsscan outputs to stdout with -o flag
+          python3 -c "
+          import subprocess, json, sys
+          result = subprocess.run(
+              ['nodejsscan', '-d', '.', '-o', 'nodejsscan-results.json'],
+              capture_output=True, text=True
+          )
+          print(result.stdout[:500])
+          print(result.stderr[:500], file=sys.stderr)
+          " || true
+          # Ensure file exists
+          ls nodejsscan-results.json 2>/dev/null || echo '{}' > nodejsscan-results.json
 
       - name: POST findings
         if: always()
@@ -442,31 +493,65 @@ jobs:
           python3 - <<'EOF'
           import json, os, hmac, hashlib, urllib.request
 
+          findings = []
+
           try:
               with open("nodejsscan-results.json") as f:
-                  data = json.load(f)
-          except Exception:
+                  raw = f.read().strip()
+              data = json.loads(raw) if raw and raw != '{}' else {}
+          except Exception as e:
+              print(f"[nodejsscan] Parse error: {e}")
               data = {}
 
-          findings = []
-          for sev_key in ["nodejs_security_findings", "vuln_count"]:
-              pass
-          for key, items in data.items():
+          # NodeJsScan JSON structure: {"nodejs_security_findings": [...], "template_findings": [...], ...}
+          # Each finding: {"title": ..., "description": ..., "tag": ..., "filename": ..., "line": ..., "lines": ...}
+          sev_map = {
+              "critical": "critical", "high": "high",
+              "medium": "medium", "low": "low",
+              "good": "info", "warning": "medium"
+          }
+
+          # Keys that contain actual findings (lists of dicts)
+          finding_keys = [
+              "nodejs_security_findings", "template_findings",
+              "nodejs_security_bugs", "error_findings"
+          ]
+
+          for key in finding_keys:
+              items = data.get(key, [])
               if not isinstance(items, list):
                   continue
               for r in items:
                   if not isinstance(r, dict):
                       continue
+                  sev_raw = str(r.get("severity", r.get("tag", "medium"))).lower()
+                  title = r.get("title", r.get("description", "NodeJsScan finding"))
                   findings.append({
                       "tool": "nodejsscan",
-                      "ruleId": r.get("tag", ""),
-                      "title": r.get("title", "NodeJsScan finding"),
-                      "description": r.get("description", ""),
-                      "severity": "medium",
-                      "filePath": r.get("filename", ""),
-                      "lineStart": r.get("line"),
-                      "codeSnippet": r.get("lines", "")[:400]
+                      "ruleId": str(r.get("tag", r.get("rule_id", ""))),
+                      "title": str(title)[:120] if title else "NodeJsScan finding",
+                      "description": str(r.get("description", ""))[:500],
+                      "severity": sev_map.get(sev_raw, "medium"),
+                      "filePath": str(r.get("filename", r.get("path", ""))) or None,
+                      "lineStart": int(r["line"]) if r.get("line") else None,
+                      "codeSnippet": str(r.get("lines", r.get("code", "")))[:400]
                   })
+
+          # Also check top-level list format
+          if not findings and isinstance(data, list):
+              for r in data:
+                  if not isinstance(r, dict): continue
+                  findings.append({
+                      "tool": "nodejsscan",
+                      "ruleId": str(r.get("tag", "")),
+                      "title": str(r.get("title", "NodeJsScan finding"))[:120],
+                      "description": str(r.get("description", ""))[:500],
+                      "severity": "medium",
+                      "filePath": str(r.get("filename", "")) or None,
+                      "lineStart": int(r["line"]) if r.get("line") else None,
+                  })
+
+          print(f"[nodejsscan] Found {len(findings)} findings")
 
           payload = json.dumps({
               "event": "scan.completed",
@@ -526,28 +611,100 @@ jobs:
           import json, os, hmac, hashlib, urllib.request, glob
 
           findings = []
-          for sarif_file in glob.glob("codeql-results/**/*.sarif", recursive=True):
+
+          # Search multiple possible output locations
+          sarif_patterns = [
+              "codeql-results/**/*.sarif",
+              "codeql-results/*.sarif",
+              "*.sarif",
+              "/home/runner/work/**/*.sarif",
+          ]
+
+          sarif_files = []
+          for pattern in sarif_patterns:
+              sarif_files.extend(glob.glob(pattern, recursive=True))
+          sarif_files = list(set(sarif_files))
+
+          print(f"[codeql] Found SARIF files: {sarif_files}")
+
+          sev_map = {
+              "error": "high", "warning": "medium",
+              "note": "low", "none": "info",
+              "fail": "high", "open": "medium", "review": "low"
+          }
+
+          for sarif_file in sarif_files:
               try:
                   with open(sarif_file) as f:
                       data = json.load(f)
-              except Exception:
+              except Exception as e:
+                  print(f"[codeql] Could not parse {sarif_file}: {e}")
                   continue
+
               for run in data.get("runs", []):
-                  rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+                  driver = run.get("tool", {}).get("driver", {})
+                  rules = {
+                      r["id"]: r
+                      for r in driver.get("rules", [])
+                  }
+
                   for result in run.get("results", []):
-                      rule = rules.get(result.get("ruleId", ""), {})
-                      loc = result.get("locations", [{}])[0].get("physicalLocation", {})
-                      sev_label = result.get("kind", "fail")
+                      rule_id = result.get("ruleId", "")
+                      rule = rules.get(rule_id, {})
+
+                      # Get title from multiple fallback sources
+                      title = (
+                          rule.get("shortDescription", {}).get("text") or
+                          rule.get("name") or
+                          result.get("message", {}).get("text", "")[:80] or
+                          rule_id or
+                          "CodeQL finding"
+                      )
+
+                      # Get description
+                      desc = (
+                          rule.get("fullDescription", {}).get("text") or
+                          result.get("message", {}).get("text", "")
+                      )[:500]
+
+                      # Get severity from rule properties or result level
+                      sev_raw = (
+                          rule.get("properties", {}).get("problem.severity") or
+                          rule.get("properties", {}).get("severity") or
+                          result.get("level") or
+                          result.get("kind") or
+                          "warning"
+                      ).lower()
+
+                      # Get location
+                      locs = result.get("locations", [])
+                      loc = locs[0].get("physicalLocation", {}) if locs else {}
+                      file_uri = loc.get("artifactLocation", {}).get("uri", "")
+                      region = loc.get("region", {})
+                      line_start = region.get("startLine")
+                      line_end = region.get("endLine")
+
+                      # Skip if no meaningful title or location
+                      if not title or title == rule_id:
+                          continue
+
                       findings.append({
                           "tool": "codeql",
-                          "ruleId": result.get("ruleId", ""),
-                          "title": rule.get("shortDescription", {}).get("text", result.get("ruleId", "CodeQL")),
-                          "description": rule.get("fullDescription", {}).get("text", "")[:500],
-                          "severity": "high" if sev_label == "fail" else "medium",
-                          "filePath": loc.get("artifactLocation", {}).get("uri", ""),
-                          "lineStart": loc.get("region", {}).get("startLine"),
-                          "lineEnd":   loc.get("region", {}).get("endLine"),
+                          "ruleId": rule_id,
+                          "title": str(title)[:120],
+                          "description": str(desc),
+                          "severity": sev_map.get(sev_raw, "medium"),
+                          "filePath": file_uri or None,
+                          "lineStart": line_start,
+                          "lineEnd": line_end,
+                          "cweId": next(
+                              (t["id"] for t in rule.get("properties", {}).get("tags", [])
+                               if isinstance(t, str) and t.startswith("CWE-")),
+                              ""
+                          ) if isinstance(rule.get("properties", {}).get("tags"), list) else ""
                       })
+
+          print(f"[codeql] Total findings: {len(findings)}")
 
           payload = json.dumps({
               "event": "scan.completed",

@@ -97,10 +97,16 @@ export function ReportAI({ scanId, repoName, findings }: Props) {
         {lines.map((line, i) => {
           if (!line.trim()) return null
           if (line.startsWith("## ")) {
+            const title = line.replace("## ", "")
+            const isFP = title.toLowerCase().includes("false positive")
+            const isNoise = title.toLowerCase().includes("noise")
             return (
-              <p key={i} className="text-[13px] font-semibold text-white mt-3"
-                 style={{ letterSpacing: "-0.26px" }}>
-                {line.replace("## ", "")}
+              <p key={i}
+                className={`text-[13px] font-semibold mt-4 mb-1 ${
+                  isFP || isNoise ? "text-[#fbbf24]" : "text-white"
+                }`}
+                style={{ letterSpacing: "-0.26px" }}>
+                {isFP || isNoise ? "⚠ " : ""}{title}
               </p>
             )
           }

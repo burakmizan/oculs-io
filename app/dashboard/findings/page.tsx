@@ -43,7 +43,9 @@ export default async function FindingsPage({ searchParams }: PageProps) {
   } catch { /* Aurora offline */ }
 
   // Pick selected scan — default to most recent completed
-  const completedScans = userScans.filter(s => s.status === "completed" && s.vulnerabilitiesCount > 0)
+  const completedScans = userScans.filter(s =>
+    s.status === "completed" || s.status === "running"
+  )
   const selectedScan = completedScans.find(s => s.id === scanParam) ?? completedScans[0] ?? null
 
   if (selectedScan) {
@@ -53,14 +55,18 @@ export default async function FindingsPage({ searchParams }: PageProps) {
   }
 
   // Dedup — group same finding across multiple tool runs
-  const dedupMap = new Map<string, VulnerabilityRow & { count: number }>()
+  const dedupMap = new Map<string, VulnerabilityRow & { count: number; lines: number[] }>()
   for (const v of vulns) {
-    const key = `${v.tool}::${v.filePath ?? v.targetUrl ?? ""}::${v.lineStart ?? 0}::${v.title}`
+    // Group by tool + title (same rule, different lines = same issue)
+    const key = `${v.tool}::${v.title}`
     const existing = dedupMap.get(key)
     if (!existing) {
-      dedupMap.set(key, { ...v, count: 1 })
+      dedupMap.set(key, { ...v, count: 1, lines: v.lineStart ? [v.lineStart] : [] })
     } else {
       existing.count++
+      if (v.lineStart && !existing.lines.includes(v.lineStart)) {
+        existing.lines.push(v.lineStart)
+      }
     }
   }
   const deduped = Array.from(dedupMap.values())
@@ -183,10 +189,16 @@ export default async function FindingsPage({ searchParams }: PageProps) {
 
                   <div className="min-w-0">
                     {v.filePath ? (
-                      <p className="text-[11px] font-mono text-[#555555] truncate">
-                        {v.filePath.split("/").pop()}
-                        {v.lineStart && <span className="text-[#444444]">:{v.lineStart}</span>}
-                      </p>
+                      <div>
+                        <p className="text-[11px] font-mono text-[#555555] truncate">
+                          {v.filePath.split("/").pop()}
+                        </p>
+                        {(v as VulnerabilityRow & { count: number; lines: number[] }).lines?.length > 0 && (
+                          <p className="text-[10px] font-mono text-[#444444] truncate">
+                            {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.slice(0, 3).join(", ")}
+                          </p>
+                        )}
+                      </div>
                     ) : v.targetUrl ? (
                       <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
                     ) : (
@@ -196,10 +208,10 @@ export default async function FindingsPage({ searchParams }: PageProps) {
 
                   <div className="text-center">
                     {(v as VulnerabilityRow & { count: number }).count > 1 ? (
-                      <span className="inline-flex items-center justify-center w-6 h-6
+                      <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
                                        rounded-full bg-white/[0.06] border border-white/10
                                        text-[11px] font-mono text-[#a1a1aa]">
-                        {(v as VulnerabilityRow & { count: number }).count}
+                        {(v as VulnerabilityRow & { count: number }).count}×
                       </span>
                     ) : (
                       <span className="text-[#333333]">—</span>

@@ -56,18 +56,24 @@ export default async function ReportPage({ params }: Props) {
   }
 
   // Dedup by fingerprint — keep highest severity per group
-  const dedupMap = new Map<string, VulnerabilityRow & { count: number }>()
+  const dedupMap = new Map<string, VulnerabilityRow & { count: number; lines: number[] }>()
   for (const v of vulns) {
-    const key = `${v.tool}::${v.filePath ?? v.targetUrl ?? ""}::${v.lineStart ?? 0}::${v.title}`
+    // Group by tool + title — same rule at different lines = one finding
+    const key = `${v.tool}::${v.title}`
     const existing = dedupMap.get(key)
     if (!existing) {
-      dedupMap.set(key, { ...v, count: 1 })
+      dedupMap.set(key, { ...v, count: 1, lines: v.lineStart ? [v.lineStart] : [] })
     } else {
       existing.count++
+      if (v.lineStart && !existing.lines.includes(v.lineStart)) {
+        existing.lines.push(v.lineStart)
+      }
       // Keep highest severity
       const sevOrder = ["critical", "high", "medium", "low", "info"]
       if (sevOrder.indexOf(v.severity) < sevOrder.indexOf(existing.severity)) {
-        dedupMap.set(key, { ...v, count: existing.count })
+        const lines = existing.lines
+        const count = existing.count
+        dedupMap.set(key, { ...v, count, lines })
       }
     }
   }
@@ -143,6 +149,11 @@ export default async function ReportPage({ params }: Props) {
       </div>
 
       {/* AI Report */}
+      <div className="mb-2">
+        <p className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#444444]">
+          AI Analysis — {repoName}
+        </p>
+      </div>
       <ReportAI
         scanId={scanId}
         repoName={repoName}
@@ -196,10 +207,17 @@ export default async function ReportPage({ params }: Props) {
                   {/* Location */}
                   <div className="min-w-0">
                     {v.filePath ? (
-                      <p className="text-[11px] font-mono text-[#555555] truncate">
-                        {v.filePath.split("/").pop()}
-                        {v.lineStart && <span className="text-[#444444]">:{v.lineStart}</span>}
-                      </p>
+                      <div>
+                        <p className="text-[11px] font-mono text-[#555555] truncate">
+                          {v.filePath.split("/").pop()}
+                        </p>
+                        {(v as VulnerabilityRow & { count: number; lines: number[] }).lines?.length > 0 && (
+                          <p className="text-[10px] font-mono text-[#444444] truncate">
+                            lines: {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.slice(0, 3).join(", ")}
+                            {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.length > 3 && "…"}
+                          </p>
+                        )}
+                      </div>
                     ) : v.targetUrl ? (
                       <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
                     ) : (
@@ -210,10 +228,10 @@ export default async function ReportPage({ params }: Props) {
                   {/* Duplicate count */}
                   <div className="text-center">
                     {(v as VulnerabilityRow & { count: number }).count > 1 ? (
-                      <span className="inline-flex items-center justify-center w-6 h-6
+                      <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
                                        rounded-full bg-white/[0.06] border border-white/10
                                        text-[11px] font-mono text-[#a1a1aa]">
-                        {(v as VulnerabilityRow & { count: number }).count}
+                        {(v as VulnerabilityRow & { count: number }).count}×
                       </span>
                     ) : (
                       <span className="text-[#333333]">—</span>

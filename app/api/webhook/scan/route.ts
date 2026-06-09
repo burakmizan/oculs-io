@@ -18,7 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { revalidatePath } from "next/cache"
-import { eq } from "drizzle-orm"
+import { eq, count } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities } from "@/lib/db/schema"
 import { analyzeFindings } from "@/lib/ai"
@@ -289,8 +289,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // ── 11. Finalise scan row ─────────────────────────────────────────────────
+  // ── 11. Finalise scan row ────────────────────────────────────────────
   try {
+    // Count total vulnerabilities in Aurora for this scan (may span multiple webhook calls)
+    const [countResult] = await db
+      .select({ count: count(vulnerabilities.id) })
+      .from(vulnerabilities)
+      .where(eq(vulnerabilities.scanId, scanId))
+
+    const totalCount = Number(countResult?.count ?? triaged.length)
+
     await db
       .update(scans)
       .set({
@@ -298,7 +306,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         completedAt: new Date(),
         commitSha,
         branch,
-        vulnerabilitiesCount: triaged.length,
+        vulnerabilitiesCount: totalCount,
         summary: { ...summary, riskScore },
         error: null,
       })

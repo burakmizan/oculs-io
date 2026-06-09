@@ -236,10 +236,39 @@ export async function queueScan(input: {
   targetUrl: string | null
   tools: ScanTool[]
 }): Promise<string> {
+  // Resolve or create organization for this user
+  let orgId: string | null = null
+  try {
+    const [existingOrg] = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.ownerId, input.userId))
+      .limit(1)
+
+    if (existingOrg) {
+      orgId = existingOrg.id
+    } else {
+      const [newOrg] = await db
+        .insert(organizations)
+        .values({
+          ownerId: input.userId,
+          name: "My Workspace",
+          slug: input.userId.slice(0, 60).replace(/[^a-z0-9]+/gi, "-").toLowerCase(),
+        })
+        .onConflictDoUpdate({
+          target: [organizations.ownerId, organizations.slug],
+          set: { name: "My Workspace" },
+        })
+        .returning({ id: organizations.id })
+      orgId = newOrg?.id ?? null
+    }
+  } catch { /* non-fatal — proceed without org */ }
+
   const [project] = await db
     .insert(projects)
     .values({
       userId: input.userId,
+      organizationId: orgId,
       name: input.repoFullName.split("/").pop() ?? input.repoFullName,
       repoFullName: input.repoFullName,
       repoUrl: `https://github.com/${input.repoFullName}`,
@@ -326,7 +355,7 @@ export async function getUserScans(
   userId: string,
   limit = 50,
 ): Promise<ScanListRow[]> {
-  return db
+  const rows = await db
     .select({
       id: scans.id,
       repoFullName: projects.repoFullName,
@@ -341,6 +370,8 @@ export async function getUserScans(
     .where(eq(scans.userId, userId))
     .orderBy(desc(scans.createdAt))
     .limit(limit)
+
+  return rows
 }
 
 export async function getVulnerabilitiesByScan(
