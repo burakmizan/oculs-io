@@ -3,9 +3,11 @@
 import { revalidatePath } from "next/cache"
 import { auth } from "@/auth"
 import { db } from "@/lib/db"
+import { TOOLS_BY_ID } from "@/lib/tools"
 import { projects, organizations, users } from "@/lib/db/schema"
 import { eq, count, and } from "drizzle-orm"
 import { cookies } from "next/headers"
+import type { ScanTool } from "@/types"
 
 export interface ProjectActionState {
   error?: string
@@ -181,5 +183,75 @@ export async function deleteProject(projectId: string) {
     return { ok: true }
   } catch (e) {
     return { error: "Could not delete project." }
+  }
+}
+
+export async function toggleSchedule(projectId: string, enabled: boolean) {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Session expired." }
+
+  try {
+    await db
+      .update(projects)
+      .set({ scanScheduleEnabled: enabled, updatedAt: new Date() })
+      .where(and(eq(projects.id, projectId), eq(projects.userId, session.user.id)))
+    revalidatePath("/dashboard/projects")
+    return { ok: true }
+  } catch {
+    return { error: "Could not update schedule." }
+  }
+}
+
+const VALID_FREQ = new Set(["daily", "weekly"])
+const VALID_GATE = new Set(["off", "critical", "high", "medium"])
+
+export async function updateProjectSettings(
+  _prev: ProjectActionState,
+  formData: FormData,
+): Promise<ProjectActionState> {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Session expired." }
+
+  const projectId = String(formData.get("projectId") ?? "").trim()
+  if (!projectId) return { error: "Project ID missing." }
+
+  // Schedule
+  const scanScheduleEnabled = formData.get("scanScheduleEnabled") === "true"
+  const freqRaw = String(formData.get("scanFrequency") ?? "daily")
+  const scanFrequency = VALID_FREQ.has(freqRaw) ? freqRaw : "daily"
+  const scanHourUtc = Math.min(23, Math.max(0, Number(formData.get("scanHourUtc") ?? 2) || 0))
+  const scanDayOfWeek = Math.min(6, Math.max(0, Number(formData.get("scanDayOfWeek") ?? 1) || 0))
+  const tools = formData
+    .getAll("tools")
+    .map(String)
+    .filter((t): t is ScanTool => t in TOOLS_BY_ID)
+
+  // Policies
+  const gateRaw = String(formData.get("gateThreshold") ?? "critical")
+  const gateThreshold = VALID_GATE.has(gateRaw) ? gateRaw : "critical"
+  const autoFixEnabled = formData.get("autoFixEnabled") === "true"
+  const badgePublic = formData.get("badgePublic") === "true"
+
+  try {
+    await db
+      .update(projects)
+      .set({
+        scanScheduleEnabled,
+        scanFrequency,
+        scanHourUtc,
+        scanDayOfWeek,
+        scheduledTools: tools.length > 0 ? tools : null,
+        gateThreshold,
+        autoFixEnabled,
+        badgePublic,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(projects.id, projectId), eq(projects.userId, session.user.id)))
+
+    revalidatePath("/dashboard/projects")
+    revalidatePath(`/dashboard/projects/${projectId}/settings`)
+    return { ok: true }
+  } catch {
+    return { error: "Could not save settings. Try again." }
   }
 }

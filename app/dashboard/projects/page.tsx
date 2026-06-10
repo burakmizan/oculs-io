@@ -2,8 +2,9 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
 import { getUserProjects } from "@/lib/db/queries"
-import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2 } from "lucide-react"
+import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2, Settings } from "lucide-react"
 import { deleteProject } from "./actions"
+import { BadgeSnippet } from "@/components/dashboard/BadgeSnippet"
 
 // Add name field to ProjectOption type usage
 
@@ -138,6 +139,16 @@ export default async function ProjectsPage() {
                       <Edit2 size={12} />
                       Edit
                     </Link>
+
+                    <Link
+                      href={`/dashboard/projects/${p.id}/settings`}
+                      className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-[6px] border border-white/10 text-[12px] text-[#555555]
+                                 hover:text-[#a1a1aa] hover:bg-white/10 transition-colors"
+                    >
+                      <Settings size={12} />
+                      Settings
+                    </Link>
+
                     <a
                       href={`https://github.com/${p.repoFullName}`}
                       target="_blank"

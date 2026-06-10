@@ -6,6 +6,7 @@ import {
   integer,
   uuid,
   jsonb,
+  boolean,
   primaryKey,
   uniqueIndex,
   index,
@@ -209,6 +210,27 @@ export const projects = pgTable(
     /** Live URL scanned by DAST tools (OWASP ZAP, Nuclei, …). */
     targetUrl: text("target_url"),
     defaultBranch: text("default_branch").default("main").notNull(),
+    // ── Per-tenant scheduled scan config (DB-driven, checked hourly by cron) ──
+    /** Master switch for automatic recurring scans. */
+    scanScheduleEnabled: boolean("scan_schedule_enabled").notNull().default(false),
+    /** "daily" | "weekly". */
+    scanFrequency: text("scan_frequency").notNull().default("daily"),
+    /** Hour of day (0–23, UTC) at which the scan should run. */
+    scanHourUtc: integer("scan_hour_utc").notNull().default(2),
+    /** Day of week (0=Sun … 6=Sat) — only used when frequency = "weekly". */
+    scanDayOfWeek: integer("scan_day_of_week").notNull().default(1),
+    /** Tools to run on scheduled scans; empty/null falls back to a safe default set. */
+    scheduledTools: scanToolEnum("scheduled_tools").array(),
+    /** Timestamp of the last scheduled dispatch (cron de-dup guard). */
+    lastScheduledAt: timestamp("last_scheduled_at", { mode: "date" }),
+
+    // ── Per-tenant policy toggles ───────────────────────────────────────────
+    /** PR/commit-gate threshold: "off" | "critical" | "high" | "medium". */
+    gateThreshold: text("gate_threshold").notNull().default("critical"),
+    /** Allow one-click AI-fix pull requests for this project. */
+    autoFixEnabled: boolean("auto_fix_enabled").notNull().default(true),
+    /** Whether the public security badge endpoint exposes a real grade. */
+    badgePublic: boolean("badge_public").notNull().default(true),
     createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
   },

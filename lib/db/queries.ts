@@ -1,4 +1,4 @@
-import { eq, and, count, desc, inArray } from "drizzle-orm"
+import { eq, and, count, desc, inArray, notInArray } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { cookies } from "next/headers"
 import {
@@ -235,6 +235,44 @@ export async function getProjectById(
   return row ?? null
 }
 
+export interface ProjectSettings {
+  id: string
+  name: string
+  repoFullName: string
+  scanScheduleEnabled: boolean
+  scanFrequency: string
+  scanHourUtc: number
+  scanDayOfWeek: number
+  scheduledTools: ScanTool[] | null
+  gateThreshold: string
+  autoFixEnabled: boolean
+  badgePublic: boolean
+}
+
+export async function getProjectSettings(
+  projectId: string,
+  userId: string,
+): Promise<ProjectSettings | null> {
+  const [row] = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      repoFullName: projects.repoFullName,
+      scanScheduleEnabled: projects.scanScheduleEnabled,
+      scanFrequency: projects.scanFrequency,
+      scanHourUtc: projects.scanHourUtc,
+      scanDayOfWeek: projects.scanDayOfWeek,
+      scheduledTools: projects.scheduledTools,
+      gateThreshold: projects.gateThreshold,
+      autoFixEnabled: projects.autoFixEnabled,
+      badgePublic: projects.badgePublic,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1)
+  return row ?? null
+}
+
 export async function getUserProjects(
   userId: string,
 ): Promise<ProjectOption[]> {
@@ -340,6 +378,7 @@ export interface VulnerabilityRow {
   remediation: string | null
   aiFixPatch: string | null
   status: string
+  fingerprint?: string | null
   createdAt: Date
   repoFullName: string
   scanId: string
@@ -420,7 +459,9 @@ export async function getUserScans(
 export async function getVulnerabilitiesByScan(
   scanId: string,
   userId: string,
+  view: "active" | "muted" = "active",
 ): Promise<VulnerabilityRow[]> {
+  const mutedStatuses = ["false_positive", "dismissed"] as const
   return db
     .select({
       id: vulnerabilities.id,
@@ -435,6 +476,7 @@ export async function getVulnerabilitiesByScan(
       remediation: vulnerabilities.remediation,
       aiFixPatch: vulnerabilities.aiFixPatch,
       status: vulnerabilities.status,
+      fingerprint: vulnerabilities.fingerprint,
       createdAt: vulnerabilities.createdAt,
       repoFullName: projects.repoFullName,
       scanId: vulnerabilities.scanId,
@@ -445,6 +487,9 @@ export async function getVulnerabilitiesByScan(
       and(
         eq(vulnerabilities.scanId, scanId),
         eq(vulnerabilities.userId, userId),
+        view === "muted"
+          ? inArray(vulnerabilities.status, [...mutedStatuses])
+          : notInArray(vulnerabilities.status, [...mutedStatuses]),
       ),
     )
     .orderBy(desc(vulnerabilities.createdAt))

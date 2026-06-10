@@ -18,9 +18,9 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { revalidatePath } from "next/cache"
-import { eq, count } from "drizzle-orm"
+import { eq, count, and, inArray } from "drizzle-orm"
 import { db } from "@/lib/db"
-import { scans, vulnerabilities } from "@/lib/db/schema"
+import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { WebhookPayload, SeverityLevel } from "@/types"
 import type { TriagedFinding } from "@/lib/ai"
@@ -251,10 +251,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── 10. Bulk-insert vulnerabilities ─────────────────────────────────────
   if (triaged.length > 0) {
+    // Carry forward mutes: any fingerprint this user previously marked as
+    // false_positive / dismissed stays suppressed on every future scan.
+    const mutedFingerprints = new Set<string>()
+    try {
+      const prior = await db
+        .selectDistinct({ fingerprint: vulnerabilities.fingerprint })
+        .from(vulnerabilities)
+        .where(
+          and(
+            eq(vulnerabilities.userId, userId),
+            inArray(vulnerabilities.status, ["false_positive", "dismissed"]),
+          ),
+        )
+      for (const p of prior) if (p.fingerprint) mutedFingerprints.add(p.fingerprint)
+    } catch (err) {
+      console.error("[webhook] Mute lookup failed (non-fatal):", err)
+    }
+
     const rows = triaged.map((f) => {
       // Resolve tool category from the catalog; default to "sast" if unknown
       const toolSpec = TOOLS_BY_ID[f.tool]
       const category = toolSpec?.category ?? "sast"
+      const isMuted = mutedFingerprints.has(f.fingerprint)
 
       return {
         scanId,
@@ -280,6 +299,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         aiFixExplanation: null,
         aiFixModel: null,
         fixStatus: "none" as const,
+        status: isMuted ? ("false_positive" as const) : ("open" as const),
         references: f.references ?? null,
         fingerprint: f.fingerprint,
         raw: f as unknown as Record<string, unknown>,
@@ -332,7 +352,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.error("[webhook] Final scan update failed:", err)
   }
 
-  // ── 12. Revalidate dashboard RSC cache ────────────────────────────────────
+  // ── 12. Post a GitHub commit status (PR/merge gate) ───────────────────────
+  // Gate threshold is a per-tenant policy stored on the project.
+  if (commitSha) {
+    try {
+      let gateThreshold = "critical"
+      try {
+        const [proj] = await db
+          .select({ gateThreshold: projects.gateThreshold })
+          .from(projects)
+          .where(eq(projects.id, projectId))
+          .limit(1)
+        gateThreshold = proj?.gateThreshold ?? "critical"
+      } catch { /* default */ }
+
+      if (gateThreshold !== "off") {
+        await postCommitStatus({
+          repository,
+          commitSha,
+          scanId,
+          userId,
+          summary,
+          gateThreshold,
+          riskScore,
+        })
+      }
+    } catch (err) {
+      console.error("[webhook] Commit status post failed:", err)
+      // Non-fatal — the scan itself is already recorded.
+    }
+  }
+
+  // ── 13. Revalidate dashboard RSC cache ────────────────────────────────────
   revalidatePath("/dashboard")
 
   return NextResponse.json({
@@ -342,4 +393,69 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     riskScore,
     summary,
   })
+}
+
+// ---------------------------------------------------------------------------
+// GitHub commit status — turns Oculs into a PR/merge gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Posts a commit status to the scanned SHA. With branch protection enabled
+ * requiring the "oculs/security" check, a critical finding blocks merge.
+ * Token is resolved from the project owner's stored OAuth account.
+ */
+async function postCommitStatus(input: {
+  repository: string
+  commitSha: string
+  scanId: string
+  userId: string
+  summary: Record<SeverityLevel, number>
+  gateThreshold: string
+  riskScore: number
+}): Promise<void> {
+  const [owner, repo] = input.repository.split("/")
+  if (!owner || !repo) return
+
+  // Resolve the owner's GitHub token (webhook has no session)
+  let token: string | null = null
+  try {
+    const [acct] = await db
+      .select({ access_token: accounts.access_token })
+      .from(accounts)
+      .where(eq(accounts.userId, input.userId))
+      .limit(1)
+    token = acct?.access_token ?? process.env.GITHUB_TOKEN ?? null
+  } catch { /* fall through */ }
+  if (!token) return
+
+  // Count findings at or above the configured threshold.
+  const order: SeverityLevel[] = ["critical", "high", "medium", "low", "info"]
+  const cutoff = order.indexOf(input.gateThreshold as SeverityLevel)
+  const blocking = order
+    .slice(0, cutoff < 0 ? 1 : cutoff + 1)
+    .reduce((sum, sev) => sum + (input.summary[sev] ?? 0), 0)
+
+  const passed = blocking === 0
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://oculs-io.vercel.app"
+
+  await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/statuses/${input.commitSha}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({
+        state: passed ? "success" : "failure",
+        context: "oculs/security",
+        description: passed
+          ? `No findings at/above ${input.gateThreshold} · risk ${input.riskScore}/100`
+          : `${blocking} finding(s) at/above ${input.gateThreshold} · risk ${input.riskScore}/100`,
+        target_url: `${appUrl}/dashboard/report/${input.scanId}`,
+      }),
+    },
+  )
 }

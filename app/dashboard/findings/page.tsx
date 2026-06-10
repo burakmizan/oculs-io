@@ -3,35 +3,19 @@ import Link from "next/link"
 import { auth } from "@/auth"
 import { getUserScans, getVulnerabilitiesByScan, type VulnerabilityRow, type ScanListRow } from "@/lib/db/queries"
 import { ScanSwitcher } from "@/components/dashboard/ScanSwitcher"
+import { FindingsTable } from "@/components/dashboard/FindingsTable"
 
 export const metadata: Metadata = { title: "Findings" }
 
-const SEV_COLOR: Record<string, string> = {
-  critical: "text-[#f87171] bg-[#f87171]/10 border-[#f87171]/20",
-  high:     "text-[#fb923c] bg-[#fb923c]/10 border-[#fb923c]/20",
-  medium:   "text-[#fbbf24] bg-[#fbbf24]/10 border-[#fbbf24]/20",
-  low:      "text-[#60a5fa] bg-[#60a5fa]/10 border-[#60a5fa]/20",
-  info:     "text-[#a1a1aa] bg-white/[0.04] border-white/10",
-}
-
 const SEV_ORDER = ["critical", "high", "medium", "low", "info"]
 
-function SeverityBadge({ severity }: { severity: string }) {
-  return (
-    <span className={`inline-flex items-center h-5 px-2 rounded-[4px] border
-                      text-[10px] font-mono uppercase tracking-[0.04em]
-                      ${SEV_COLOR[severity] ?? SEV_COLOR.info}`}>
-      {severity}
-    </span>
-  )
-}
-
 interface PageProps {
-  searchParams: Promise<{ scan?: string }>
+  searchParams: Promise<{ scan?: string; view?: string }>
 }
 
 export default async function FindingsPage({ searchParams }: PageProps) {
-  const { scan: scanParam } = await searchParams
+  const { scan: scanParam, view: viewParam } = await searchParams
+  const view: "active" | "muted" = viewParam === "muted" ? "muted" : "active"
   const session = await auth()
   const userId = session!.user.id
 
@@ -50,7 +34,7 @@ export default async function FindingsPage({ searchParams }: PageProps) {
 
   if (selectedScan) {
     try {
-      vulns = await getVulnerabilitiesByScan(selectedScan.id, userId)
+      vulns = await getVulnerabilitiesByScan(selectedScan.id, userId, view)
     } catch { /* Aurora offline */ }
   }
 
@@ -124,6 +108,24 @@ export default async function FindingsPage({ searchParams }: PageProps) {
         </div>
       ) : (
         <>
+          {/* Active / Muted tabs */}
+          <div className="flex items-center gap-1 mb-4 border border-white/10 rounded-[8px] p-0.5 w-fit bg-white/[0.02]">
+            <Link
+              href={`/dashboard/findings?scan=${selectedScan.id}&view=active`}
+              className={`h-7 px-3 flex items-center rounded-[6px] text-[12px] font-mono transition-colors
+                ${view === "active" ? "bg-white/[0.08] text-white" : "text-[#666666] hover:text-white"}`}
+            >
+              Active
+            </Link>
+            <Link
+              href={`/dashboard/findings?scan=${selectedScan.id}&view=muted`}
+              className={`h-7 px-3 flex items-center rounded-[6px] text-[12px] font-mono transition-colors
+                ${view === "muted" ? "bg-white/[0.08] text-white" : "text-[#666666] hover:text-white"}`}
+            >
+              Muted
+            </Link>
+          </div>
+
           {/* Severity summary + report link */}
           <div className="flex items-center gap-3 mb-4">
             <div className="flex-1 grid grid-cols-5 gap-2">
@@ -156,71 +158,7 @@ export default async function FindingsPage({ searchParams }: PageProps) {
             </Link>
           </div>
 
-          {/* Findings table */}
-          <div className="bg-white/[0.02] border border-white/10 rounded-[12px] overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-white/[0.07]
-                            grid grid-cols-[1fr_90px_90px_140px_60px]
-                            gap-4 text-[10px] font-mono uppercase tracking-[0.06em] text-[#444444]">
-              <span>Title</span>
-              <span>Severity</span>
-              <span>Tool</span>
-              <span>Location</span>
-              <span>Count</span>
-            </div>
-
-            <ul className="divide-y divide-white/[0.04]">
-              {deduped.map(v => (
-                <li key={v.id}
-                  className="px-5 py-3.5 grid grid-cols-[1fr_90px_90px_140px_60px] gap-4
-                             hover:bg-white/[0.02] transition-colors items-center">
-
-                  <div className="min-w-0">
-                    <p className="text-[13px] text-white truncate" style={{ letterSpacing: "-0.26px" }}>
-                      {v.title}
-                    </p>
-                    <p className="text-[11px] font-mono text-[#444444] truncate mt-0.5">
-                      {v.repoFullName}
-                      {v.cweId && <span className="ml-2 text-[#333333]">{v.cweId}</span>}
-                    </p>
-                  </div>
-
-                  <div><SeverityBadge severity={v.severity} /></div>
-                  <span className="text-[11px] font-mono text-[#555555] truncate">{v.tool}</span>
-
-                  <div className="min-w-0">
-                    {v.filePath ? (
-                      <div>
-                        <p className="text-[11px] font-mono text-[#555555] truncate">
-                          {v.filePath.split("/").pop()}
-                        </p>
-                        {(v as VulnerabilityRow & { count: number; lines: number[] }).lines?.length > 0 && (
-                          <p className="text-[10px] font-mono text-[#444444] truncate">
-                            {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.slice(0, 3).join(", ")}
-                          </p>
-                        )}
-                      </div>
-                    ) : v.targetUrl ? (
-                      <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
-                    ) : (
-                      <span className="text-[#333333]">—</span>
-                    )}
-                  </div>
-
-                  <div className="text-center">
-                    {(v as VulnerabilityRow & { count: number }).count > 1 ? (
-                      <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
-                                       rounded-full bg-white/[0.06] border border-white/10
-                                       text-[11px] font-mono text-[#a1a1aa]">
-                        {(v as VulnerabilityRow & { count: number }).count}×
-                      </span>
-                    ) : (
-                      <span className="text-[#333333]">—</span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
+          <FindingsTable findings={deduped} />
 
           <p className="mt-3 text-[11px] font-mono text-[#333333] text-right">
             {deduped.length} unique · {vulns.length} total

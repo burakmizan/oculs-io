@@ -9,6 +9,7 @@ import {
   type ProjectOption,
 } from "@/lib/db/queries"
 import type { DashboardStats } from "@/types"
+import { RiskGauge } from "@/components/dashboard/RiskGauge"
 
 export const metadata: Metadata = { title: "Overview" }
 
@@ -78,6 +79,13 @@ export default async function DashboardPage() {
           + New Scan
         </Link>
       </div>
+
+      {/* Risk gauge hero */}
+      <RiskGauge
+        score={stats.riskScore}
+        openFindings={stats.openVulnerabilities}
+        totalScans={stats.scans}
+      />
 
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
