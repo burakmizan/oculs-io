@@ -1613,13 +1613,89 @@ jobs:
     continue-on-error: true
     if: ${{ github.event.inputs.target_url != '' }}
     steps:
-      - name: POST 0 findings (Nmap requires complex XML parsing)
+      - name: Run Nmap + vulners NSE
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y nmap || true
+          # Extract a bare host from the target URL (strip scheme, path and port)
+          RAW="${{ github.event.inputs.target_url || secrets.TARGET_URL }}"
+          HOST=$(echo "$RAW" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##; s#:.*$##')
+          echo "[nmap] Target host: $HOST"
+          if [ -n "$HOST" ]; then
+            # -sV service/version detection + vulners script; XML output for parsing
+            nmap -sV --script vulners --top-ports 100 -oX nmap-results.xml "$HOST" || true
+          fi
+          ls -la nmap-results.xml 2>/dev/null || echo "<nmaprun></nmaprun>" > nmap-results.xml
+
+      - name: POST Nmap findings
+        if: always()
         run: |
           python3 - <<'EOF'
-          import json, os, hmac, hashlib, urllib.request
-          payload = json.dumps({"event": "scan.completed", "scanId": os.environ["SCAN_ID"], "repository": os.environ["REPO"], "branch": os.environ["BRANCH"], "commitSha": os.environ["SHA"], "findings": []})
-          req = urllib.request.Request(os.environ["OCULS_WEBHOOK_URL"], data=payload.encode(), headers={"Content-Type": "application/json", "X-Oculs-Signature-256": "sha256=" + hmac.new(os.environ["OCULS_WEBHOOK_SECRET"].encode(), payload.encode(), hashlib.sha256).hexdigest()}, method="POST")
-          urllib.request.urlopen(req)
+          import os, json, hmac, hashlib, urllib.request
+          import xml.etree.ElementTree as ET
+
+          findings = []
+          try:
+              tree = ET.parse("nmap-results.xml")
+              root = tree.getroot()
+              for host in root.findall("host"):
+                  addr_el = host.find("address")
+                  addr = addr_el.get("addr") if addr_el is not None else ""
+                  for port in host.findall(".//port"):
+                      portid = port.get("portid", "")
+                      svc = port.find("service")
+                      svc_name = svc.get("name", "") if svc is not None else ""
+                      svc_ver = svc.get("version", "") if svc is not None else ""
+                      # vulners script output sits under <script id="vulners">
+                      for script in port.findall("script"):
+                          if script.get("id") != "vulners":
+                              continue
+                          for table in script.findall(".//table"):
+                              cve = sev = ""
+                              for elem in table.findall("elem"):
+                                  key = elem.get("key", "")
+                                  if key == "id":
+                                      cve = (elem.text or "").strip()
+                                  elif key == "cvss":
+                                      try:
+                                          score = float((elem.text or "0").strip())
+                                          sev = "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low"
+                                      except ValueError:
+                                          sev = "medium"
+                              if cve:
+                                  findings.append({
+                                      "tool": "nmap_vulners",
+                                      "ruleId": cve,
+                                      "title": f"{cve} on {svc_name or 'service'} (port {portid})",
+                                      "description": f"Vulnerable service {svc_name} {svc_ver} on {addr}:{portid}".strip(),
+                                      "severity": sev or "medium",
+                                      "targetUrl": f"{addr}:{portid}",
+                                      "references": [f"https://vulners.com/cve/{cve}"] if cve.startswith("CVE-") else [],
+                                  })
+          except Exception as e:
+              print(f"[nmap] Parse note: {e}")
+
+          print(f"[nmap] Sending {len(findings)} findings")
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          try:
+              with urllib.request.urlopen(req) as res:
+                  print(f"[nmap] Webhook: {res.status}")
+          except Exception as e:
+              print(f"[nmap] Webhook failed: {e}")
           EOF
         env:
           OCULS_WEBHOOK_URL: ${{ secrets.OCULS_WEBHOOK_URL }}
@@ -2164,6 +2240,142 @@ jobs:
           )
           with urllib.request.urlopen(req) as res:
               print(f"Webhook: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+          TARGET_URL:           ${{ secrets.TARGET_URL }}
+
+      # ── SQLmap ──────────────────────────────────────────
+      - name: Run SQLmap
+        run: |
+          pipx install sqlmap || pip install sqlmap || true
+          # --batch = non-interactive; --crawl discovers params from the target
+          sqlmap -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
+            --batch \
+            --crawl=2 \
+            --level=2 \
+            --risk=1 \
+            --timeout=15 \
+            --output-dir=./sqlmap-out \
+            --results-file=sqlmap-results.csv || true
+          ls -la sqlmap-results.csv 2>/dev/null || echo "" > sqlmap-results.csv
+
+      - name: POST SQLmap findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import os, csv, json, hmac, hashlib, urllib.request
+
+          findings = []
+          try:
+              with open("sqlmap-results.csv", newline="") as f:
+                  for row in csv.DictReader(f):
+                      target = row.get("Target URL") or row.get("target") or ""
+                      param  = row.get("Parameter") or row.get("parameter") or ""
+                      if not target and not param:
+                          continue
+                      findings.append({
+                          "tool": "sqlmap",
+                          "ruleId": "sql-injection",
+                          "title": f"SQL injection in parameter '{param}'" if param else "SQL injection detected",
+                          "description": f"SQLmap confirmed an injectable parameter on {target}.",
+                          "severity": "critical",
+                          "targetUrl": target,
+                          "cweId": "CWE-89",
+                          "owaspCategory": "A03:2021 - Injection",
+                      })
+          except Exception as e:
+              print(f"[sqlmap] Parse note: {e}")
+
+          print(f"[sqlmap] Sending {len(findings)} findings")
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          try:
+              with urllib.request.urlopen(req) as res:
+                  print(f"[sqlmap] Webhook: {res.status}")
+          except Exception as e:
+              print(f"[sqlmap] Webhook failed: {e}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
+      # ── Arachni ─────────────────────────────────────────
+      - name: Run Arachni
+        run: |
+          # Official Arachni Docker image; output a binary report then convert to JSON
+          docker run --rm -v "$PWD:/out" arachni/arachni:latest \
+            bash -c "arachni '${{ github.event.inputs.target_url || secrets.TARGET_URL }}' \
+              --timeout 00:05:00 \
+              --report-save-path=/out/arachni.afr && \
+              arachni_reporter /out/arachni.afr --reporter=json:outfile=/out/arachni-results.json" \
+            || true
+          ls -la arachni-results.json 2>/dev/null || echo '{}' > arachni-results.json
+
+      - name: POST Arachni findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import os, json, hmac, hashlib, urllib.request
+
+          try:
+              with open("arachni-results.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+
+          SEV_MAP = {"high": "high", "medium": "medium", "low": "low", "informational": "info"}
+          findings = []
+          for issue in (data.get("issues") or []):
+              sev = SEV_MAP.get(str(issue.get("severity", "")).lower(), "medium")
+              vector = issue.get("vector") or {}
+              findings.append({
+                  "tool": "arachni",
+                  "ruleId": issue.get("check", {}).get("shortname", "") or issue.get("name", ""),
+                  "title": issue.get("name", "Arachni finding"),
+                  "description": (issue.get("description", "") or "")[:500],
+                  "severity": sev,
+                  "targetUrl": vector.get("action", "") or issue.get("referring_page", {}).get("dom", {}).get("url", ""),
+                  "cweId": f"CWE-{issue.get('cwe')}" if issue.get("cwe") else "",
+              })
+
+          print(f"[arachni] Sending {len(findings)} findings")
+          payload = json.dumps({
+              "event": "scan.completed",
+              "scanId": os.environ["SCAN_ID"],
+              "repository": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commitSha": os.environ["SHA"],
+              "findings": findings
+          })
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          try:
+              with urllib.request.urlopen(req) as res:
+                  print(f"[arachni] Webhook: {res.status}")
+          except Exception as e:
+              print(f"[arachni] Webhook failed: {e}")
           EOF
         env:
           OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}

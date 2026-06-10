@@ -22,6 +22,7 @@ import { eq, count, and, inArray } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
+import { sendScanAlert } from "@/lib/notify"
 import type { WebhookPayload, SeverityLevel } from "@/types"
 import type { TriagedFinding } from "@/lib/ai"
 
@@ -178,6 +179,44 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 6. Handle scan.completed ─────────────────────────────────────────────
   if (event !== "scan.completed") {
     return NextResponse.json({ error: `Unknown event: ${event}` }, { status: 400 })
+  }
+
+  // Idempotency guard — the workflow fires one scan.completed per tool PLUS a
+  // final empty "summary ping" (notify-complete sends findings:[]). A completed
+  // event carrying no findings must never roll an already-finished scan back to
+  // "running" or re-post commit statuses. We only finalise the scan row here and
+  // return early, leaving any real findings already persisted untouched.
+  if (findings.length === 0) {
+    try {
+      const [existing] = await db
+        .select({ status: scans.status, vulnerabilitiesCount: scans.vulnerabilitiesCount })
+        .from(scans)
+        .where(eq(scans.id, scanId))
+        .limit(1)
+
+      // Recount from Aurora so the summary ping reflects everything persisted so far.
+      const [countResult] = await db
+        .select({ count: count(vulnerabilities.id) })
+        .from(vulnerabilities)
+        .where(eq(vulnerabilities.scanId, scanId))
+      const totalCount = Number(countResult?.count ?? existing?.vulnerabilitiesCount ?? 0)
+
+      await db
+        .update(scans)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          commitSha,
+          branch,
+          vulnerabilitiesCount: totalCount,
+          error: null,
+        })
+        .where(eq(scans.id, scanId))
+      revalidatePath("/dashboard")
+    } catch (err) {
+      console.error("[webhook] Summary-ping finalise failed (non-fatal):", err)
+    }
+    return NextResponse.json({ received: true, event, summaryPing: true })
   }
 
   try {
@@ -383,7 +422,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // ── 13. Revalidate dashboard RSC cache ────────────────────────────────────
+  // ── 13. Notify Slack/Discord if this batch met the user's threshold ───────
+  try {
+    await sendScanAlert({ userId, repository, scanId, summary })
+  } catch (err) {
+    console.error("[webhook] Scan alert failed (non-fatal):", err)
+  }
+
+  // ── 14. Revalidate dashboard RSC cache ────────────────────────────────────
   revalidatePath("/dashboard")
 
   return NextResponse.json({

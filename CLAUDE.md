@@ -122,7 +122,7 @@ Auth.js v5 requires two separate modules because the middleware runs on the Edge
 **Request path for the core scan loop:**
 1. User configures a scan in `ScanModal` and submits → `createScan` server action (`app/dashboard/actions.ts`) calls `queueScan()` — upserts the project and inserts a `scans` row with `status: "queued"`, returns `scanId`.
 2. `createScan` fire-and-forgets a call to `POST /api/scan/trigger`, which dispatches a `workflow_dispatch` event on `oculs-scan.yml` in the target repo (uses `session.user.githubAccessToken`). Non-fatal if this fails — scan row is already in Aurora.
-3. GitHub Actions workflow runs the configured tools and POSTs results to `POST /api/webhook/scan`. The route handler will validate the HMAC-SHA256 signature, call the Gemini AI agent, and write `vulnerabilities` rows to Aurora. **Stub — not yet implemented.**
+3. GitHub Actions workflow runs the configured tools and POSTs results to `POST /api/webhook/scan`. The route handler validates the HMAC-SHA256 signature, AI-triages findings via the Gemini agent, carries forward muted fingerprints, bulk-inserts `vulnerabilities` rows into Aurora, finalises the `scans` row, and posts a GitHub commit status (PR/merge gate). Implemented and live.
 4. The frontend shows `ScanProgress` while waiting — this is a **client-side animation only** (hardcoded stage list, `setTimeout` cycling). It does NOT poll Aurora. Real scan status lives only in the `scans` table.
 5. The dashboard reads Aurora directly via React Server Components — no polling. `getDashboardStats` computes a weighted 0–100 risk score from open vulnerability severities.
 
@@ -144,12 +144,12 @@ Auth.js v5 requires two separate modules because the middleware runs on the Edge
 | `app/dashboard/projects/[id]/edit/page.tsx` | Client component — edit project form; reads initial values from search params |
 | `app/api/github/repos/route.ts` | Returns user's GitHub repos using `session.user.githubAccessToken`; cached 60s |
 | `app/api/scan/trigger/route.ts` | Dispatches `workflow_dispatch` on `oculs-scan.yml` in target repo |
-| `app/api/webhook/scan/route.ts` | **Stub** — entry point for GitHub Actions scan result payloads |
+| `app/api/webhook/scan/route.ts` | HMAC-verified ingestion: AI triage → mute carry-forward → bulk insert → scan finalise → commit-status gate |
 | `lib/db/index.ts` | Aurora PostgreSQL client (postgres.js + Drizzle, `max: 1` for serverless) |
 | `lib/db/schema.ts` | Drizzle schema: `users`, `accounts`, `sessions`, `verificationTokens`, `organizations`, `projects`, `scans`, `vulnerabilities` + 8 Postgres ENUMs |
 | `lib/db/queries.ts` | Data-access helpers: auth lookups, onboarding, dashboard stats, project CRUD, scan queuing |
 | `lib/tools.ts` | 20-tool security catalog (`TOOLS`, `TOOLS_BY_ID`, `CATEGORY_META`); `id` values match the `scan_tool` Postgres ENUM exactly |
-| `lib/ai/index.ts` | **Stub** — Gemini agent placeholders (`analyzeFindings`, `generateAutoFix`, `generateReport`) |
+| `lib/ai/index.ts` | Gemini agent — `analyzeFindings` (triage + CWE/OWASP/CVSS), `generateAutoFix` (unified-diff patch), `generateReport` (Markdown summary) |
 | `lib/auth/password.ts` | `hashPassword` / `verifyPassword` via bcryptjs (pure-JS, no native bindings) |
 | `types/index.ts` | Re-exports Drizzle-inferred row types + enum string-literal unions + view models + `WebhookPayload` contract |
 | `components/landing/` | Landing page sections (NavBar, Hero, Features, Pricing, etc.) |

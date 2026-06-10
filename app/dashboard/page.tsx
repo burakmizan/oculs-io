@@ -5,11 +5,17 @@ import {
   getDashboardStats,
   getRecentScans,
   getUserProjects,
+  getOwaspCoverage,
+  getMttrStats,
   type RecentScanRow,
   type ProjectOption,
+  type OwaspCell,
+  type MttrStats,
 } from "@/lib/db/queries"
 import type { DashboardStats } from "@/types"
 import { RiskGauge } from "@/components/dashboard/RiskGauge"
+import { OwaspGrid } from "@/components/dashboard/OwaspGrid"
+import { MttrCard } from "@/components/dashboard/MttrCard"
 
 export const metadata: Metadata = { title: "Overview" }
 
@@ -54,12 +60,16 @@ export default async function DashboardPage() {
   let stats: DashboardStats = EMPTY_STATS
   let recent: RecentScanRow[] = []
   let projects: ProjectOption[] = []
+  let owaspCells: OwaspCell[] = []
+  let mttr = {} as MttrStats // Component hata vermesin diye boş state
 
   try {
-    ;[stats, recent, projects] = await Promise.all([
+    ;[stats, recent, projects, owaspCells, mttr] = await Promise.all([
       getDashboardStats(userId),
       getRecentScans(userId, 5),
       getUserProjects(userId),
+      getOwaspCoverage(userId),
+      getMttrStats(userId),
     ])
   } catch { /* Aurora offline in local dev — show empty state */ }
 
@@ -86,6 +96,12 @@ export default async function DashboardPage() {
         openFindings={stats.openVulnerabilities}
         totalScans={stats.scans}
       />
+
+      {/* MTTR KPIs */}
+      <MttrCard stats={mttr} />
+
+      {/* OWASP Top 10 coverage */}
+      <OwaspGrid cells={owaspCells} />
 
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">

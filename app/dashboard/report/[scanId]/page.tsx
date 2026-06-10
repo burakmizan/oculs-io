@@ -5,9 +5,11 @@ import { auth } from "@/auth"
 import {
   getVulnerabilitiesByScan,
   getUserScans,
+  getScanShareToken,
   type VulnerabilityRow,
 } from "@/lib/db/queries"
 import { ReportAI } from "@/components/dashboard/ReportAI"
+import { ShareReportButton } from "@/components/dashboard/ShareReportButton"
 
 export const metadata: Metadata = { title: "Scan Report" }
 
@@ -44,9 +46,11 @@ export default async function ReportPage({ params }: Props) {
   let repoName = ""
   let scanDate: Date | null = null
   let isDastScan = false
+  let shareToken: string | null = null
 
   try {
     vulns = await getVulnerabilitiesByScan(scanId, userId)
+    shareToken = await getScanShareToken(scanId, userId)
     const scans = await getUserScans(userId, 50)
     const scan = scans.find(s => s.id === scanId)
     // Don't notFound() — scan may be queued/running with no vulns yet

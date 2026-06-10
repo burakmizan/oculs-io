@@ -1,4 +1,4 @@
-import { eq, and, count, desc, inArray, notInArray } from "drizzle-orm"
+import { eq, and, count, desc, inArray, notInArray, isNotNull } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { cookies } from "next/headers"
 import {
@@ -172,6 +172,105 @@ export async function getDashboardStats(
     openVulnerabilities,
     // No scans yet → no meaningful score.
     riskScore: (scanCount[0]?.c ?? 0) === 0 ? null : Math.min(100, weighted),
+  }
+}
+
+/* ── OWASP Top 10 coverage ─────────────────────────────────────────── */
+
+export const OWASP_TOP_10: { id: string; title: string }[] = [
+  { id: "A01", title: "Broken Access Control" },
+  { id: "A02", title: "Cryptographic Failures" },
+  { id: "A03", title: "Injection" },
+  { id: "A04", title: "Insecure Design" },
+  { id: "A05", title: "Security Misconfiguration" },
+  { id: "A06", title: "Vulnerable & Outdated Components" },
+  { id: "A07", title: "Identification & Auth Failures" },
+  { id: "A08", title: "Software & Data Integrity Failures" },
+  { id: "A09", title: "Logging & Monitoring Failures" },
+  { id: "A10", title: "Server-Side Request Forgery" },
+]
+
+export interface OwaspCell {
+  id: string
+  title: string
+  count: number
+  topSeverity: SeverityLevel | null
+}
+
+export async function getOwaspCoverage(userId: string): Promise<OwaspCell[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  const vulnCondition = activeTeamId === "personal"
+    ? eq(vulnerabilities.userId, userId)
+    : inArray(vulnerabilities.projectId, db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)))
+
+  let rows: { owaspCategory: string | null; severity: SeverityLevel }[] = []
+  try {
+    rows = await db
+      .select({ owaspCategory: vulnerabilities.owaspCategory, severity: vulnerabilities.severity })
+      .from(vulnerabilities)
+      .where(and(vulnCondition, inArray(vulnerabilities.status, ["open", "in_review"])))
+  } catch {
+    rows = []
+  }
+
+  const sevRank: SeverityLevel[] = ["critical", "high", "medium", "low", "info"]
+  return OWASP_TOP_10.map((cat) => {
+    // owaspCategory is stored free-form (e.g. "A03:2021 – Injection"); match by ID prefix.
+    const matches = rows.filter((r) => (r.owaspCategory ?? "").toUpperCase().includes(cat.id))
+    let topSeverity: SeverityLevel | null = null
+    for (const m of matches) {
+      if (topSeverity === null || sevRank.indexOf(m.severity) < sevRank.indexOf(topSeverity)) {
+        topSeverity = m.severity
+      }
+    }
+    return { id: cat.id, title: cat.title, count: matches.length, topSeverity }
+  })
+}
+
+/* ── MTTR (mean time to remediate) ─────────────────────────────────── */
+
+export interface MttrStats {
+  /** Average hours between finding creation and fix application. */
+  avgHours: number | null
+  /** Number of findings that have actually been fixed (sample size). */
+  fixedCount: number
+  /** Currently open findings (not yet fixed). */
+  openCount: number
+}
+
+export async function getMttrStats(userId: string): Promise<MttrStats> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  const vulnCondition = activeTeamId === "personal"
+    ? eq(vulnerabilities.userId, userId)
+    : inArray(vulnerabilities.projectId, db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)))
+
+  try {
+    const [fixed, open] = await Promise.all([
+      db
+        .select({ createdAt: vulnerabilities.createdAt, fixAppliedAt: vulnerabilities.fixAppliedAt })
+        .from(vulnerabilities)
+        .where(and(vulnCondition, isNotNull(vulnerabilities.fixAppliedAt))),
+      db
+        .select({ c: count() })
+        .from(vulnerabilities)
+        .where(and(vulnCondition, inArray(vulnerabilities.status, ["open", "in_review"]))),
+    ])
+
+    if (fixed.length === 0) {
+      return { avgHours: null, fixedCount: 0, openCount: open[0]?.c ?? 0 }
+    }
+    const totalMs = fixed.reduce((sum, r) => {
+      if (!r.fixAppliedAt) return sum
+      return sum + (r.fixAppliedAt.getTime() - r.createdAt.getTime())
+    }, 0)
+    const avgHours = totalMs / fixed.length / (1000 * 60 * 60)
+    return { avgHours: Math.round(avgHours * 10) / 10, fixedCount: fixed.length, openCount: open[0]?.c ?? 0 }
+  } catch {
+    return { avgHours: null, fixedCount: 0, openCount: 0 }
   }
 }
 
@@ -418,6 +517,71 @@ export async function getVulnerabilities(
     .limit(limit)
 }
 
+export interface PublicReport {
+  repoFullName: string
+  createdAt: Date
+  completedAt: Date | null
+  summary: Record<string, number> | null
+  vulns: VulnerabilityRow[]
+}
+
+/**
+ * Resolves a scan by its public share token (no auth — read-only).
+ * Returns null when the token is unknown or sharing is disabled.
+ */
+export async function getReportByShareToken(token: string): Promise<PublicReport | null> {
+  if (!token) return null
+  try {
+    const [scan] = await db
+      .select({
+        id: scans.id,
+        repoFullName: projects.repoFullName,
+        createdAt: scans.createdAt,
+        completedAt: scans.completedAt,
+        summary: scans.summary,
+      })
+      .from(scans)
+      .innerJoin(projects, eq(scans.projectId, projects.id))
+      .where(eq(scans.shareToken, token))
+      .limit(1)
+
+    if (!scan) return null
+
+    const vulns = await db
+      .select({
+        id: vulnerabilities.id,
+        title: vulnerabilities.title,
+        severity: vulnerabilities.severity,
+        tool: vulnerabilities.tool,
+        filePath: vulnerabilities.filePath,
+        targetUrl: vulnerabilities.targetUrl,
+        lineStart: vulnerabilities.lineStart,
+        cweId: vulnerabilities.cweId,
+        owaspCategory: vulnerabilities.owaspCategory,
+        remediation: vulnerabilities.remediation,
+        aiFixPatch: vulnerabilities.aiFixPatch,
+        status: vulnerabilities.status,
+        createdAt: vulnerabilities.createdAt,
+        repoFullName: projects.repoFullName,
+        scanId: vulnerabilities.scanId,
+      })
+      .from(vulnerabilities)
+      .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))
+      .where(and(eq(vulnerabilities.scanId, scan.id), notInArray(vulnerabilities.status, ["false_positive", "dismissed"])))
+      .orderBy(desc(vulnerabilities.createdAt))
+
+    return {
+      repoFullName: scan.repoFullName,
+      createdAt: scan.createdAt,
+      completedAt: scan.completedAt,
+      summary: scan.summary,
+      vulns: vulns as VulnerabilityRow[],
+    }
+  } catch {
+    return null
+  }
+}
+
 export interface ScanListRow {
   id: string
   repoFullName: string
@@ -493,4 +657,17 @@ export async function getVulnerabilitiesByScan(
       ),
     )
     .orderBy(desc(vulnerabilities.createdAt))
+}
+
+export async function getScanShareToken(scanId: string, userId: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ shareToken: scans.shareToken })
+      .from(scans)
+      .where(and(eq(scans.id, scanId), eq(scans.userId, userId)))
+      .limit(1)
+    return row?.shareToken ?? null
+  } catch {
+    return null
+  }
 }

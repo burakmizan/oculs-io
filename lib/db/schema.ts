@@ -116,6 +116,10 @@ export const users = pgTable("users", {
   onboardingCompletedAt: timestamp("onboarding_completed_at", { mode: "date" }),
   // Plan yönetimi: starter, pro, enterprise
   plan: text("plan").default("starter").notNull(),
+  /** Optional Slack/Discord incoming-webhook URL for new-critical alerts. */
+  alertWebhookUrl: text("alert_webhook_url"),
+  /** Minimum severity that triggers an alert: "off" | "critical" | "high". */
+  alertThreshold: text("alert_threshold").notNull().default("critical"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 })
 
@@ -267,6 +271,8 @@ export const scans = pgTable(
       .notNull()
       .default(0),
     error: text("error"),
+    /** Random public token enabling a read-only shareable report at /r/[token]. Null = not shared. */
+    shareToken: text("share_token"),
     startedAt: timestamp("started_at", { mode: "date" }),
     completedAt: timestamp("completed_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
@@ -275,6 +281,7 @@ export const scans = pgTable(
     projectIdx: index("scans_project_idx").on(t.projectId),
     userIdx: index("scans_user_idx").on(t.userId),
     statusIdx: index("scans_status_idx").on(t.status),
+    shareTokenIdx: uniqueIndex("scans_share_token_unique").on(t.shareToken),
   }),
 )
 
