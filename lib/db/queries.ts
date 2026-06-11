@@ -1,4 +1,4 @@
-import { eq, and, count, desc, inArray, notInArray, isNotNull } from "drizzle-orm"
+import { eq, and, count, desc, gte, inArray, notInArray, isNotNull, sql } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { cookies } from "next/headers"
 import {
@@ -33,6 +33,7 @@ export async function createCredentialsUser(input: {
   name: string
   email: string
   passwordHash: string
+  plan?: string
 }): Promise<User> {
   const [user] = await db
     .insert(users)
@@ -40,9 +41,57 @@ export async function createCredentialsUser(input: {
       name: input.name,
       email: input.email.toLowerCase(),
       passwordHash: input.passwordHash,
+      ...(input.plan ? { plan: input.plan } : {}),
     })
     .returning()
   return user
+}
+
+/* ── Plans ─────────────────────────────────────────────────────────── */
+
+/**
+ * Launch promo: every account is on the Pro plan for free.
+ * Idempotent and cheap — only issues an UPDATE while the user is still on
+ * the schema-default Starter plan (covers OAuth signups and older accounts).
+ */
+export async function promoteStarterToPro(userId: string): Promise<void> {
+  const [row] = await db
+    .select({ plan: users.plan })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  if (row?.plan === "starter") {
+    await db.update(users).set({ plan: "pro" }).where(eq(users.id, userId))
+  }
+}
+
+/** Finding-history retention window per plan, in days; null = unlimited. */
+const PLAN_RETENTION_DAYS: Record<string, number | null> = {
+  starter: 7,
+  pro: 90,
+  enterprise: null,
+}
+
+/**
+ * Oldest `createdAt` still visible to this user's plan, or null when the
+ * plan has unlimited retention. Fails open: if the plan cannot be read
+ * (DB hiccup, unknown plan value), returns null so no data is hidden.
+ */
+export async function getRetentionCutoff(userId: string): Promise<Date | null> {
+  try {
+    const [row] = await db
+      .select({ plan: users.plan })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+    const days = PLAN_RETENTION_DAYS[row?.plan ?? ""] ?? null
+    if (days === null) return null
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - days)
+    return cutoff
+  } catch {
+    return null
+  }
 }
 
 /* ── Onboarding ────────────────────────────────────────────────────── */
@@ -432,6 +481,71 @@ export async function getUserProjects(
     .orderBy(desc(projects.updatedAt))
 }
 
+export interface ProjectWithStatus extends ProjectOption {
+  /** Most recent scan for this project, or null when never scanned. */
+  latestScan: {
+    status: string
+    commitSha: string | null
+    vulnerabilitiesCount: number
+    summary: Record<string, number> | null
+    completedAt: Date | null
+  } | null
+}
+
+export async function getUserProjectsWithStatus(
+  userId: string,
+): Promise<ProjectWithStatus[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      repoFullName: projects.repoFullName,
+      targetUrl: projects.targetUrl,
+    })
+    .from(projects)
+    .where(activeTeamId === "personal"
+      ? eq(projects.userId, userId)
+      // team_id is not in the Drizzle schema yet — raw SQL avoids an `any` cast.
+      : sql`${projects}."team_id" = ${activeTeamId}`)
+    .orderBy(desc(projects.updatedAt))
+
+  if (rows.length === 0) return []
+
+  // Latest scan per project via Postgres DISTINCT ON (projectId, newest first).
+  const latest = await db
+    .selectDistinctOn([scans.projectId], {
+      projectId: scans.projectId,
+      status: scans.status,
+      commitSha: scans.commitSha,
+      vulnerabilitiesCount: scans.vulnerabilitiesCount,
+      summary: scans.summary,
+      completedAt: scans.completedAt,
+    })
+    .from(scans)
+    .where(inArray(scans.projectId, rows.map((r) => r.id)))
+    .orderBy(scans.projectId, desc(scans.createdAt))
+
+  const byProject = new Map(latest.map((s) => [s.projectId, s]))
+  return rows.map((p) => {
+    const s = byProject.get(p.id)
+    return {
+      ...p,
+      latestScan: s
+        ? {
+            status: s.status,
+            commitSha: s.commitSha,
+            vulnerabilitiesCount: s.vulnerabilitiesCount,
+            summary: s.summary,
+            completedAt: s.completedAt,
+          }
+        : null,
+    }
+  })
+}
+
 /* ── Scan orchestration ────────────────────────────────────────────── */
 
 /** Idempotently resolve a project for `owner/repo`, then queue a scan. */
@@ -664,6 +778,8 @@ export async function getVulnerabilitiesByScan(
   scanId: string,
   userId: string,
   view: "active" | "muted" = "active",
+  /** Plan-based history cutoff (see getRetentionCutoff); null = no limit. */
+  retentionCutoff: Date | null = null,
 ): Promise<VulnerabilityRow[]> {
   const mutedStatuses = ["false_positive", "dismissed"] as const
   return db
@@ -694,6 +810,7 @@ export async function getVulnerabilitiesByScan(
         view === "muted"
           ? inArray(vulnerabilities.status, [...mutedStatuses])
           : notInArray(vulnerabilities.status, [...mutedStatuses]),
+        retentionCutoff ? gte(vulnerabilities.createdAt, retentionCutoff) : undefined,
       ),
     )
     .orderBy(desc(vulnerabilities.createdAt))

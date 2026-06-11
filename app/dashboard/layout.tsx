@@ -1,11 +1,12 @@
 import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { auth } from "@/auth"
-import { hasCompletedOnboarding, getUserProjects } from "@/lib/db/queries"
+import { hasCompletedOnboarding, getUserProjects, promoteStarterToPro } from "@/lib/db/queries"
 import { Sidebar } from "@/components/dashboard/Sidebar"
 import { TopBar } from "@/components/dashboard/TopBar"
 import { PersistentScanProgress } from "@/components/dashboard/PersistentScanProgress"
 import { CommandPalette } from "@/components/dashboard/CommandPalette"
+import { WelcomeProModal } from "@/components/dashboard/WelcomeProModal"
 
 export const metadata: Metadata = {
   title: {
@@ -24,6 +25,14 @@ export default async function DashboardLayout({
   if (!session?.user) {
     redirect("/login")
   }
+
+  // Launch promo: every account is Pro for free. Covers OAuth signups
+  // (created with the schema-default "starter") and pre-promo accounts.
+  // Idempotent — no write once the user is already Pro; a DB hiccup must
+  // never block the dashboard.
+  try {
+    await promoteStarterToPro(session.user.id)
+  } catch { /* non-fatal */ }
 
   // Gate: unonboarded users must complete the wizard before using the dashboard.
   // Wrapped in try/catch so a DB outage doesn't lock users out.
@@ -51,6 +60,7 @@ export default async function DashboardLayout({
         <PersistentScanProgress />
       </div>
       <CommandPalette projects={paletteProjects} />
+      <WelcomeProModal />
     </div>
   )
 }

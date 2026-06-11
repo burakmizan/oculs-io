@@ -6,7 +6,7 @@ import { queueScan } from "@/lib/db/queries"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, teams, teamMembers, teamInvites, projects, users, accounts } from "@/lib/db/schema"
 import { cookies } from "next/headers"
-import { eq, and, count } from "drizzle-orm"
+import { eq, and, count, gte } from "drizzle-orm"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { ScanTool } from "@/types"
 
@@ -109,6 +109,7 @@ export async function createScan(
       .where(
         and(
           eq(scans.userId, session.user.id),
+          gte(scans.createdAt, thirtyDaysAgo),
         )
       )
     

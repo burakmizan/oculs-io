@@ -43,9 +43,33 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
     }
   }, [scanId, repoName, toolCount])
 
-  // Advance stages
+  // Real scan status polled from Aurora — drives completion instead of a timer
+  const [scanStatus, setScanStatus] = useState<string | null>(null)
   useEffect(() => {
-    if (stageIdx >= STAGES.length - 1) return
+    if (scanStatus === "completed" || scanStatus === "failed") return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/scan/${scanId}/status`)
+        if (!res.ok) return // 401 / 404 / 5xx — keep last known state, retry next tick
+        const data = await res.json()
+        if (!cancelled && typeof data?.status === "string") setScanStatus(data.status)
+      } catch {
+        // Network error — ignore and retry on next tick
+      }
+    }
+    poll()
+    const t = setInterval(poll, 2500)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [scanId, scanStatus])
+
+  const isDone = scanStatus === "completed"
+  const isFailed = scanStatus === "failed"
+
+  // Advance cosmetic stages, but never reach the final stage on the timer —
+  // the scan only completes when Aurora reports status "completed".
+  useEffect(() => {
+    if (stageIdx >= STAGES.length - 2) return
     const t = setTimeout(() => setStageIdx(i => i + 1), 3800 + Math.random() * 800)
     return () => clearTimeout(t)
   }, [stageIdx])
@@ -56,9 +80,10 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
     return () => clearInterval(t)
   }, [])
 
-  const stage = STAGES[stageIdx]!
-  const pct = stage.pct
-  const isDone = pct === 100
+  // Jump to the final stage once the real scan finishes (derived, not state)
+  const effectiveStageIdx = isDone ? STAGES.length - 1 : stageIdx
+  const stage = STAGES[effectiveStageIdx]!
+  const pct = isDone ? 100 : stage.pct
 
   // Navigate to report page when done — use router.push to avoid popup blocker
   const [reportOpened, setReportOpened] = useState(false)
@@ -72,8 +97,13 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
     }
   }, [isDone, reportOpened, scanId, router])
 
+  // Failed scans should not leave a stale Dynamic Island behind
+  useEffect(() => {
+    if (isFailed) localStorage.removeItem(STORAGE_KEY)
+  }, [isFailed])
+
   const estTotal = Math.round((toolCount * 45) / 60)
-  const estRemain = isDone ? 0 : Math.max(0, estTotal * 60 - elapsed)
+  const estRemain = isDone || isFailed ? 0 : Math.max(0, estTotal * 60 - elapsed)
   const remMin = Math.floor(estRemain / 60)
   const remSec = estRemain % 60
 
@@ -88,11 +118,11 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
                      border border-white/15 shadow-2xl pointer-events-auto
                      hover:bg-[#1a1a1a] transition-colors cursor-pointer"
         >
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isDone ? "bg-[#4ade80]" : "bg-[#60a5fa] animate-pulse"}`} />
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isFailed ? "bg-[#f87171]" : isDone ? "bg-[#4ade80]" : "bg-[#60a5fa] animate-pulse"}`} />
           <span className="text-[12px] font-mono text-white" style={{ letterSpacing: "-0.14px" }}>
-            {isDone ? `Scan complete — ${repoName}` : `Scanning ${repoName} · ${pct}%`}
+            {isFailed ? `Scan failed — ${repoName}` : isDone ? `Scan complete — ${repoName}` : `Scanning ${repoName} · ${pct}%`}
           </span>
-          {!isDone && (
+          {!isDone && !isFailed && (
             <span className="text-[11px] font-mono text-[#555555]">
               ~{remMin}m {String(remSec).padStart(2, "0")}s left
             </span>
@@ -100,7 +130,7 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
           <svg width="18" height="18" viewBox="0 0 18 18" className="flex-shrink-0">
             <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2"/>
             <circle cx="9" cy="9" r="7" fill="none"
-              stroke={isDone ? "#4ade80" : "#60a5fa"}
+              stroke={isFailed ? "#f87171" : isDone ? "#4ade80" : "#60a5fa"}
               strokeWidth="2" strokeLinecap="round"
               strokeDasharray={`${2 * Math.PI * 7}`}
               strokeDashoffset={`${2 * Math.PI * 7 * (1 - pct / 100)}`}
@@ -124,9 +154,9 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
         <div className="px-6 pt-6 pb-4 border-b border-white/[0.07]">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
+              <span className={`w-2 h-2 rounded-full ${isFailed ? "bg-[#f87171]" : "bg-[#60a5fa] animate-pulse"}`} />
               <span className="text-[13px] font-semibold text-white" style={{ letterSpacing: "-0.26px" }}>
-                Scan in progress
+                {isFailed ? "Scan failed" : "Scan in progress"}
               </span>
             </div>
             <span className="text-[12px] font-mono text-[#444444]">
@@ -144,7 +174,7 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
               {pct}%
             </span>
             <span className="text-[12px] font-mono text-[#555555] pb-1">
-              {isDone ? "Complete — opening report…" : `~${remMin}m ${String(remSec).padStart(2, "0")}s remaining`}
+              {isFailed ? "Scan failed — see workflow logs" : isDone ? "Complete — opening report…" : `~${remMin}m ${String(remSec).padStart(2, "0")}s remaining`}
             </span>
           </div>
 
@@ -152,16 +182,16 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
             <div className="h-full rounded-full transition-all duration-1000"
               style={{
                 width: `${pct}%`,
-                background: isDone ? "#4ade80" : "linear-gradient(90deg, #3b82f6, #60a5fa)",
+                background: isFailed ? "#f87171" : isDone ? "#4ade80" : "linear-gradient(90deg, #3b82f6, #60a5fa)",
               }}
             />
           </div>
 
           <div className="flex flex-col gap-1.5 max-h-[200px] overflow-hidden">
-            {STAGES.slice(Math.max(0, stageIdx - 2), stageIdx + 3).map((s, i) => {
-              const absIdx = Math.max(0, stageIdx - 2) + i
-              const isDoneStage = absIdx < stageIdx
-              const isCurrentStage = absIdx === stageIdx
+            {STAGES.slice(Math.max(0, effectiveStageIdx - 2), effectiveStageIdx + 3).map((s, i) => {
+              const absIdx = Math.max(0, effectiveStageIdx - 2) + i
+              const isDoneStage = absIdx < effectiveStageIdx
+              const isCurrentStage = absIdx === effectiveStageIdx
               return (
                 <div key={s.label}
                   className={`flex items-center gap-2.5 transition-opacity ${

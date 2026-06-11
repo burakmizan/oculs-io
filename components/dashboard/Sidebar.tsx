@@ -14,9 +14,6 @@ import {
   Search,
   Bell,
   Smile,
-  Monitor,
-  Sun,
-  Moon,
   Home,
   HelpCircle,
   BookOpen,
@@ -57,7 +54,6 @@ const NAV_ITEMS: {
   },
 ]
 
-type Theme = "system" | "light" | "dark"
 type FeedbackRating = "happy" | "neutral" | "sad" | null
 
 interface Notification {
@@ -81,9 +77,6 @@ export function Sidebar({ user }: { user: SidebarUser }) {
     const colors = ["bg-blue-600", "bg-emerald-600", "bg-violet-600", "bg-amber-600", "bg-pink-600", "bg-cyan-600"];
     return colors[Math.abs(hash) % colors.length];
   };
-
-  // ── Theme ────────────────────────────────────────────────────────────────
-  const [theme, setTheme] = useState<Theme>("dark")
 
   // ── Team Dropdown & Management ─────────────────────────────────────────────
   const [teamPopoverOpen, setTeamPopoverOpen] = useState(false)
@@ -129,34 +122,6 @@ export function Sidebar({ user }: { user: SidebarUser }) {
       setInviteEmails([""])
       alert("Invitations generated successfully! (Check server logs for links)")
     }
-  }
-
-  useEffect(() => {
-    const saved = (localStorage.getItem("oculs_theme") as Theme) ?? "dark"
-    setTheme(saved)
-    applyTheme(saved)
-  }, [])
-
-  function applyTheme(t: Theme) {
-    const root = document.documentElement
-    if (t === "dark") {
-      root.classList.add("dark")
-      root.style.colorScheme = "dark"
-    } else if (t === "light") {
-      root.classList.remove("dark")
-      root.style.colorScheme = "light"
-    } else {
-      // System
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
-      prefersDark ? root.classList.add("dark") : root.classList.remove("dark")
-      root.style.colorScheme = "normal"
-    }
-  }
-
-  function handleTheme(t: Theme) {
-    setTheme(t)
-    localStorage.setItem("oculs_theme", t)
-    applyTheme(t)
   }
 
   // ── Notifications ────────────────────────────────────────────────────────
@@ -353,25 +318,6 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
         {/* Bottom section */}
         <div className="px-3 pb-3 flex flex-col gap-1 border-t border-white/[0.07] pt-3">
-
-          {/* Theme switcher */}
-          <div className="flex items-center justify-between px-2.5 h-8">
-            <span className="text-[12px] text-[#555555]">Theme</span>
-            <div className="flex items-center gap-0.5 bg-white/[0.04] border border-white/10 rounded-full p-0.5">
-              {(["system", "light", "dark"] as Theme[]).map(t => {
-                const Icon = t === "system" ? Monitor : t === "light" ? Sun : Moon
-                return (
-                  <button key={t} type="button" onClick={() => handleTheme(t)}
-                    title={t.charAt(0).toUpperCase() + t.slice(1)}
-                    className={`p-1 rounded-full transition-colors ${
-                      theme === t ? "bg-white/15 text-white" : "text-[#555555] hover:text-[#a1a1aa]"
-                    }`}>
-                    <Icon size={12} />
-                  </button>
-                )
-              })}
-            </div>
-          </div>
 
           {/* Feedback */}
           <button type="button" onClick={() => setFeedbackOpen(true)}

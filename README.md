@@ -5,7 +5,7 @@
 ### AI-powered DAST & Security Scanner for Modern Developers and Vibe Coders
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![AWS Aurora](https://img.shields.io/badge/AWS-Aurora_PostgreSQL-FF9900?logo=amazon-aws)](https://aws.amazon.com/rds/aurora/)
 [![Deploy on Vercel](https://img.shields.io/badge/Deploy-Vercel-black?logo=vercel)](https://vercel.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org)
@@ -46,7 +46,7 @@ You push code. GitHub Actions runs Semgrep, OWASP ZAP, and Gitleaks. The JSON sc
 **Track:** Monetizable B2B App
 
 **Stack compliance:**
-- **Frontend & API:** Next.js 15 (App Router) deployed on **Vercel**
+- **Frontend & API:** Next.js 16 (App Router) deployed on **Vercel**
 - **Database:** **AWS Aurora PostgreSQL** (Serverless v2) via Drizzle ORM
 - **AI:** Google Gemini 3.5 Flash for vulnerability analysis and auto-fix generation
 - **Zero-backend:** All business logic runs inside Next.js Route Handlers and React Server Components — no separate API server, no Lambda, no containers
@@ -193,7 +193,7 @@ oculs-ip/
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router) |
+| Framework | Next.js 16 (App Router) |
 | Language | TypeScript 5 |
 | Styling | Tailwind CSS |
 | Database | AWS Aurora PostgreSQL (Serverless v2) |
@@ -220,6 +220,10 @@ oculs-ip/
 - [ ] API key authentication for B2B customers
 - [ ] Usage-based billing integration (Stripe)
 - [ ] Multi-repo project support
+
+### Team-aware features (roadmap)
+
+Today, Oculs.io auto-creates a single organization per user. Teams exist (create, invite, switch) and share project and scan lists, but findings, AI reports, and AI fix suggestions are scoped to the scan owner's user ID — a teammate cannot yet open or act on another member's findings. Team-shared remediation (including one-click auto-fix PRs and a team-visible AI assistant) is on the roadmap.
 
 ---
 

@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
-import { getUserScans, getVulnerabilitiesByScan, type VulnerabilityRow, type ScanListRow } from "@/lib/db/queries"
+import { getUserScans, getVulnerabilitiesByScan, getRetentionCutoff, type VulnerabilityRow, type ScanListRow } from "@/lib/db/queries"
 import { ScanSwitcher } from "@/components/dashboard/ScanSwitcher"
 import { FindingsTable } from "@/components/dashboard/FindingsTable"
 
@@ -34,7 +34,11 @@ export default async function FindingsPage({ searchParams }: PageProps) {
 
   if (selectedScan) {
     try {
-      vulns = await getVulnerabilitiesByScan(selectedScan.id, userId, view)
+      // Plan-based finding history: starter = 7 days, pro = 90 days,
+      // enterprise = unlimited. Fails open (null) so data is never hidden
+      // when the plan can't be read.
+      const retentionCutoff = await getRetentionCutoff(userId)
+      vulns = await getVulnerabilitiesByScan(selectedScan.id, userId, view, retentionCutoff)
     } catch { /* Aurora offline */ }
   }
 

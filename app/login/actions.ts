@@ -78,7 +78,8 @@ export async function registerAccount(
     }
 
     const passwordHash = await hashPassword(password)
-    await createCredentialsUser({ name, email, passwordHash })
+    // Launch promo: every new account starts on the Pro plan for free.
+    await createCredentialsUser({ name, email, passwordHash, plan: "pro" })
 
     await signIn("credentials", { email, password, redirectTo: REDIRECT_TO })
     return { ok: true }

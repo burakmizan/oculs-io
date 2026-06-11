@@ -1,8 +1,8 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
-import { getUserProjects } from "@/lib/db/queries"
-import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2, Settings } from "lucide-react"
+import { getUserProjectsWithStatus, type ProjectWithStatus } from "@/lib/db/queries"
+import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2, Settings, Minus } from "lucide-react"
 import { deleteProject } from "./actions"
 import { BadgeSnippet } from "@/components/dashboard/BadgeSnippet"
 
@@ -14,9 +14,9 @@ export default async function ProjectsPage() {
   const session = await auth()
   const userId = session!.user.id
 
-  let projects: { id: string; name: string; repoFullName: string; targetUrl: string | null }[] = []
+  let projects: ProjectWithStatus[] = []
   try {
-    projects = await getUserProjects(userId)
+    projects = await getUserProjectsWithStatus(userId)
   } catch { /* Aurora offline */ }
 
   return (
@@ -64,12 +64,21 @@ export default async function ProjectsPage() {
       ) : (
         /* Project list */
         <div className="flex flex-col gap-2">
-          {projects.map((p, index) => {
+          {projects.map((p) => {
             const [owner, repo] = p.repoFullName.split("/")
-            
-            // Dinamik status simülasyonu (Gerçek veriye göre 'isHealthy' değişkenini ayarlayabilirsin)
-            const isHealthy = index % 3 !== 2 // Sırf sen testi gör diye 3 projeden 1'ini hatalı gibi gösteriyoruz
-            const mockCommitHash = Math.random().toString(16).substring(2, 9)
+
+            // Real health signal from the latest scan in Aurora:
+            // healthy = completed with no critical/high findings,
+            // at-risk = failed or critical/high present, unknown = no finished scan yet.
+            const latest = p.latestScan
+            const shortSha = latest?.commitSha ? latest.commitSha.slice(0, 7) : null
+            const critHigh = (latest?.summary?.critical ?? 0) + (latest?.summary?.high ?? 0)
+            const health: "healthy" | "at-risk" | "unknown" =
+              !latest || (latest.status !== "completed" && latest.status !== "failed")
+                ? "unknown"
+                : latest.status === "failed" || critHigh > 0
+                  ? "at-risk"
+                  : "healthy"
 
             return (
               <div
@@ -104,10 +113,16 @@ export default async function ProjectsPage() {
                   <div className="flex items-center gap-3 text-[11px] font-mono text-[#555555] mt-1.5">
                     <span className="flex items-center gap-1.5">
                       <GitCommit size={12} className="text-[#888888]" />
-                      main · <span className="text-[#a1a1aa]">{mockCommitHash}</span>
+                      main · <span className="text-[#a1a1aa]">{shortSha ?? "—"}</span>
                     </span>
                     <span className="w-1 h-1 rounded-full bg-white/10"></span>
-                    <span>Added 2 days ago</span>
+                    <span>
+                      {latest?.completedAt
+                        ? `Last scan ${latest.completedAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        : latest
+                          ? `Scan ${latest.status}`
+                          : "No scans yet"}
+                    </span>
                   </div>
                 </div>
 
@@ -116,10 +131,12 @@ export default async function ProjectsPage() {
                   
                   {/* Dynamic Status Icon */}
                   <div className="flex items-center justify-center w-8 h-8 rounded-full bg-white/[0.02] border border-white/5 mr-2">
-                    {isHealthy ? (
+                    {health === "healthy" ? (
                       <CheckCircle2 size={16} className="text-[#4ade80]" />
-                    ) : (
+                    ) : health === "at-risk" ? (
                       <AlertCircle size={16} className="text-[#f87171] animate-pulse" />
+                    ) : (
+                      <Minus size={16} className="text-[#555555]" />
                     )}
                   </div>
 

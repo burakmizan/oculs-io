@@ -24,7 +24,7 @@ import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import { sendScanAlert } from "@/lib/notify"
 import type { WebhookPayload, SeverityLevel } from "@/types"
-import type { TriagedFinding } from "@/lib/ai"
+import { analyzeFindings } from "@/lib/ai"
 
 // ---------------------------------------------------------------------------
 // Runtime: Node.js (needs crypto + DB — NOT edge)
@@ -252,7 +252,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const { projectId, userId } = scanRow
 
   // ── 8. Map raw findings to TriagedFinding format ─────────────────────────
-  // Gemini triage runs lazily on /report/[scanId] — no rate limit issues.
+  // Base mapping uses raw tool values — this is the fallback if AI triage fails.
   const triaged = findings.map(f => ({
     ...f,
     triageSeverity: f.severity as SeverityLevel,
@@ -271,6 +271,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return hash.toString(16).padStart(8, "0")
     })(),
   }))
+
+  // Run Gemini AI triage and merge results by index. Resilient by design:
+  // if the call throws, returns fewer results, or yields an invalid severity,
+  // the affected findings simply keep their raw tool values above.
+  try {
+    const aiResults = await analyzeFindings(findings)
+    aiResults.forEach((ai, idx) => {
+      const base = triaged[idx]
+      if (!base) return
+      if (ai.triageSeverity in SEVERITY_WEIGHTS) {
+        base.triageSeverity = ai.triageSeverity
+      }
+      base.triageReasoning = ai.triageReasoning || base.triageReasoning
+      base.cweId = ai.cweId || base.cweId
+      base.owaspCategory = ai.owaspCategory || base.owaspCategory
+      base.cvssScore = ai.cvssScore || base.cvssScore
+      base.remediation = ai.remediation || base.remediation
+    })
+  } catch (err) {
+    console.error("[webhook] AI triage failed — falling back to raw tool severities:", err)
+  }
 
   // Auto-fix and report generation moved to dedicated report page
   // to avoid Gemini rate limits during bulk webhook ingestion.
