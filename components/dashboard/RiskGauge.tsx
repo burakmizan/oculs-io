@@ -54,11 +54,15 @@ export function RiskGauge({ score, openFindings, totalScans }: Props) {
     const rad = (angle * Math.PI) / 180
     const inner = R - 16
     const outer = R - 8
+    // Round to 2 decimals so Node (SSR) and the browser produce identical
+    // coordinates — Math.sin/cos may differ by 1 ULP across JS engines,
+    // which otherwise triggers a React hydration mismatch on these <line>s.
+    const r2 = (v: number) => Math.round(v * 100) / 100
     return {
-      x1: cx + inner * Math.cos(rad),
-      y1: cy + inner * Math.sin(rad),
-      x2: cx + outer * Math.cos(rad),
-      y2: cy + outer * Math.sin(rad),
+      x1: r2(cx + inner * Math.cos(rad)),
+      y1: r2(cy + inner * Math.sin(rad)),
+      x2: r2(cx + outer * Math.cos(rad)),
+      y2: r2(cy + outer * Math.sin(rad)),
       lit: i / TICKS <= target / 100,
     }
   })

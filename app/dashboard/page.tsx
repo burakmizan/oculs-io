@@ -7,13 +7,16 @@ import {
   getUserProjects,
   getOwaspCoverage,
   getMttrStats,
+  getRiskTrend,
   type RecentScanRow,
   type ProjectOption,
   type OwaspCell,
   type MttrStats,
+  type RiskTrendPoint,
 } from "@/lib/db/queries"
 import type { DashboardStats } from "@/types"
 import { RiskGauge } from "@/components/dashboard/RiskGauge"
+import { RiskTrend } from "@/components/dashboard/RiskTrend"
 import { OwaspGrid } from "@/components/dashboard/OwaspGrid"
 import { MttrCard } from "@/components/dashboard/MttrCard"
 
@@ -62,14 +65,16 @@ export default async function DashboardPage() {
   let projects: ProjectOption[] = []
   let owaspCells: OwaspCell[] = []
   let mttr = {} as MttrStats // Component hata vermesin diye boş state
+  let riskTrend: RiskTrendPoint[] = []
 
   try {
-    ;[stats, recent, projects, owaspCells, mttr] = await Promise.all([
+    ;[stats, recent, projects, owaspCells, mttr, riskTrend] = await Promise.all([
       getDashboardStats(userId),
       getRecentScans(userId, 5),
       getUserProjects(userId),
       getOwaspCoverage(userId),
       getMttrStats(userId),
+      getRiskTrend(userId, 20),
     ])
   } catch { /* Aurora offline in local dev — show empty state */ }
 
@@ -96,6 +101,9 @@ export default async function DashboardPage() {
         openFindings={stats.openVulnerabilities}
         totalScans={stats.scans}
       />
+
+      {/* Risk trend */}
+      <RiskTrend points={riskTrend} />
 
       {/* MTTR KPIs */}
       <MttrCard stats={mttr} />

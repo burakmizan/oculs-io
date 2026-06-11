@@ -288,13 +288,16 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
         {/* Search */}
       <div className="px-3 pt-3 pb-2 border-b border-white/[0.05]">
-        <div className="flex items-center gap-3 h-10 px-3 rounded-[8px] bg-white/[0.03]
-                        border border-white/10 text-[#888888] focus-within:border-white/20 transition-colors">
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event("oculs:open-command"))}
+          className="w-full flex items-center gap-3 h-10 px-3 rounded-[8px] bg-white/[0.03]
+                        border border-white/10 text-[#888888] hover:border-white/20 hover:bg-white/[0.05] transition-colors text-left"
+        >
           <Search size={16} />
-          <input type="text" placeholder="Find..."
-            className="flex-1 w-full bg-transparent border-none outline-none text-[14px]
-                       placeholder:text-[#555555] text-white" />
-        </div>
+          <span className="flex-1 text-[14px] text-[#555555]">Find...</span>
+          <span className="text-[11px] font-mono text-[#555555] border border-white/10 rounded-[4px] px-1.5 py-0.5 bg-white/[0.02]">⌘K</span>
+        </button>
       </div>
 
         {/* Navigation */}

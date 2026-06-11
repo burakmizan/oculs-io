@@ -274,6 +274,46 @@ export async function getMttrStats(userId: string): Promise<MttrStats> {
   }
 }
 
+/* ── Risk trend (time series of completed-scan risk scores) ────────── */
+
+export interface RiskTrendPoint {
+  date: Date
+  score: number
+  repoFullName: string
+}
+
+export async function getRiskTrend(userId: string, limit = 20): Promise<RiskTrendPoint[]> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  const scanCondition = activeTeamId === "personal"
+    ? eq(scans.userId, userId)
+    : inArray(
+        scans.projectId,
+        db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)),
+      )
+
+  let rows: { createdAt: Date; summary: Record<string, number> | null; repoFullName: string }[] = []
+  try {
+    rows = await db
+      .select({ createdAt: scans.createdAt, summary: scans.summary, repoFullName: projects.repoFullName })
+      .from(scans)
+      .innerJoin(projects, eq(scans.projectId, projects.id))
+      .where(and(scanCondition, eq(scans.status, "completed")))
+      .orderBy(desc(scans.createdAt))
+      .limit(limit)
+  } catch {
+    return []
+  }
+
+  // Reverse to chronological (oldest → newest) for left-to-right charting.
+  return rows.reverse().map((r) => ({
+    date: r.createdAt,
+    score: typeof r.summary?.riskScore === "number" ? r.summary.riskScore : 0,
+    repoFullName: r.repoFullName,
+  }))
+}
+
 export interface RecentScanRow {
   id: string
   repoFullName: string

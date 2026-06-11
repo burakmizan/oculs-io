@@ -1,10 +1,11 @@
 import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { auth } from "@/auth"
-import { hasCompletedOnboarding } from "@/lib/db/queries"
+import { hasCompletedOnboarding, getUserProjects } from "@/lib/db/queries"
 import { Sidebar } from "@/components/dashboard/Sidebar"
 import { TopBar } from "@/components/dashboard/TopBar"
 import { PersistentScanProgress } from "@/components/dashboard/PersistentScanProgress"
+import { CommandPalette } from "@/components/dashboard/CommandPalette"
 
 export const metadata: Metadata = {
   title: {
@@ -33,6 +34,12 @@ export default async function DashboardLayout({
     // Aurora unreachable in local dev — proceed to the dashboard gracefully.
   }
 
+  // Projects for the ⌘K command palette (navigation still works if this fails)
+  let paletteProjects: { id: string; name?: string | null; repoFullName?: string | null }[] = []
+  try {
+    paletteProjects = await getUserProjects(session.user.id)
+  } catch { /* Aurora offline — palette falls back to navigation only */ }
+
   return (
     <div className="flex h-screen bg-[#000000] overflow-hidden">
       <Sidebar user={session.user} />
@@ -43,6 +50,7 @@ export default async function DashboardLayout({
         </main>
         <PersistentScanProgress />
       </div>
+      <CommandPalette projects={paletteProjects} />
     </div>
   )
 }
