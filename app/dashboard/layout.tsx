@@ -29,10 +29,11 @@ export default async function DashboardLayout({
   // Launch promo: every account is Pro for free. Covers OAuth signups
   // (created with the schema-default "starter") and pre-promo accounts.
   // Idempotent — no write once the user is already Pro; a DB hiccup must
-  // never block the dashboard.
+  // never block the dashboard. Capture the effective plan for the UI.
+  let userPlan = "starter"
   try {
-    await promoteStarterToPro(session.user.id)
-  } catch { /* non-fatal */ }
+    userPlan = await promoteStarterToPro(session.user.id)
+  } catch { /* non-fatal — UI falls back to Starter label */ }
 
   // Gate: unonboarded users must complete the wizard before using the dashboard.
   // Wrapped in try/catch so a DB outage doesn't lock users out.
@@ -51,7 +52,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex h-screen bg-[#000000] overflow-hidden">
-      <Sidebar user={session.user} />
+      <Sidebar user={session.user} plan={userPlan} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TopBar />
         <main className="flex-1 overflow-auto bg-[#000000]">

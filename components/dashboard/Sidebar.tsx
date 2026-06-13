@@ -66,9 +66,13 @@ interface Notification {
   read: boolean
 }
 
-export function Sidebar({ user }: { user: SidebarUser }) {
+export function Sidebar({ user, plan = "starter" }: { user: SidebarUser; plan?: string }) {
   const pathname = usePathname()
   const router = useRouter()
+
+  // Capitalized plan label for the badge (e.g. "pro" → "Pro")
+  const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1)
+  const isPaid = plan === "pro" || plan === "enterprise"
 
   const getTeamColor = (name: string) => {
     if (!name || name === "Personal Projects") return "bg-red-600";
@@ -355,7 +359,15 @@ export function Sidebar({ user }: { user: SidebarUser }) {
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-white truncate" style={{ letterSpacing: "-0.24px" }}>{displayName}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[12px] text-white truncate" style={{ letterSpacing: "-0.24px" }}>{displayName}</p>
+                <span className={`flex-shrink-0 text-[9px] font-mono uppercase tracking-[0.06em] px-1.5 py-0.5 rounded-[4px] border
+                  ${isPaid
+                    ? "text-[#4ade80] border-[#4ade80]/30 bg-[#4ade80]/10"
+                    : "text-[#888888] border-white/10 bg-white/[0.04]"}`}>
+                  {planLabel}
+                </span>
+              </div>
               <p className="text-[10px] text-[#444444] truncate">{user.email ?? ""}</p>
             </div>
 

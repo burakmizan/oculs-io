@@ -18,7 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { revalidatePath } from "next/cache"
-import { eq, count, and, inArray } from "drizzle-orm"
+import { eq, count, and, inArray, ne } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
@@ -181,25 +181,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: `Unknown event: ${event}` }, { status: 400 })
   }
 
-  // Idempotency guard — the workflow fires one scan.completed per tool PLUS a
-  // final empty "summary ping" (notify-complete sends findings:[]). A completed
-  // event carrying no findings must never roll an already-finished scan back to
-  // "running" or re-post commit statuses. We only finalise the scan row here and
-  // return early, leaving any real findings already persisted untouched.
-  if (findings.length === 0) {
+  // The workflow fires one scan.completed PER TOOL (each carrying that tool's
+  // findings, often empty), and ONE final event from notify-complete carrying
+  // {"final": true}. Only the final event may mark the scan "completed" — so the
+  // dashboard can never finish before GitHub Actions finishes every job.
+  const isFinal = (payload as { final?: boolean }).final === true
+
+  // ── 6a. FINAL event → the whole workflow is done. Compute the summary from
+  // everything per-tool events persisted, then finalise (once).
+  if (isFinal) {
     try {
-      const [existing] = await db
-        .select({ status: scans.status, vulnerabilitiesCount: scans.vulnerabilitiesCount })
+      const rows = await db
+        .select({ severity: vulnerabilities.severity })
+        .from(vulnerabilities)
+        .where(eq(vulnerabilities.scanId, scanId))
+
+      const summary: Record<SeverityLevel, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+      for (const r of rows) summary[r.severity as SeverityLevel]++
+      const totalCount = rows.length
+      const riskScore = Math.min(
+        100,
+        Object.entries(summary).reduce(
+          (acc, [sev, cnt]) => acc + SEVERITY_WEIGHTS[sev as SeverityLevel] * cnt,
+          0,
+        ),
+      )
+
+      const [srow] = await db
+        .select({ projectId: scans.projectId, userId: scans.userId })
         .from(scans)
         .where(eq(scans.id, scanId))
         .limit(1)
-
-      // Recount from Aurora so the summary ping reflects everything persisted so far.
-      const [countResult] = await db
-        .select({ count: count(vulnerabilities.id) })
-        .from(vulnerabilities)
-        .where(eq(vulnerabilities.scanId, scanId))
-      const totalCount = Number(countResult?.count ?? existing?.vulnerabilitiesCount ?? 0)
 
       await db
         .update(scans)
@@ -209,22 +221,68 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           commitSha,
           branch,
           vulnerabilitiesCount: totalCount,
+          summary: { ...summary, riskScore },
           error: null,
         })
         .where(eq(scans.id, scanId))
+
+      // Commit-status gate (once, from the full result set)
+      if (srow && commitSha) {
+        try {
+          let gateThreshold = "critical"
+          try {
+            const [proj] = await db
+              .select({ gateThreshold: projects.gateThreshold })
+              .from(projects)
+              .where(eq(projects.id, srow.projectId))
+              .limit(1)
+            gateThreshold = proj?.gateThreshold ?? "critical"
+          } catch { /* default */ }
+          if (gateThreshold !== "off") {
+            await postCommitStatus({ repository, commitSha, scanId, userId: srow.userId, summary, gateThreshold, riskScore })
+          }
+        } catch (err) {
+          console.error("[webhook] Commit status post failed:", err)
+        }
+      }
+
+      // Slack/Discord alert (once)
+      if (srow) {
+        try {
+          await sendScanAlert({ userId: srow.userId, repository, scanId, summary })
+        } catch (err) {
+          console.error("[webhook] Scan alert failed (non-fatal):", err)
+        }
+      }
+
       revalidatePath("/dashboard")
     } catch (err) {
-      console.error("[webhook] Summary-ping finalise failed (non-fatal):", err)
+      console.error("[webhook] Finalise failed (non-fatal):", err)
     }
-    return NextResponse.json({ received: true, event, summaryPing: true })
+    return NextResponse.json({ received: true, event, finalized: true })
   }
 
+  // ── 6b. Per-tool event with NO findings → nothing to persist. Keep the scan
+  // "running" so it never finishes early, and return. (Don't downgrade a scan
+  // that is somehow already completed.)
+  if (findings.length === 0) {
+    try {
+      await db
+        .update(scans)
+        .set({ status: "running", startedAt: new Date() })
+        .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
+    } catch (err) {
+      console.error("[webhook] Per-tool empty event update failed (non-fatal):", err)
+    }
+    return NextResponse.json({ received: true, event, perTool: true, findings: 0 })
+  }
+
+  // ── 6c. Per-tool event WITH findings → triage + persist, but keep "running".
   try {
-    // Mark scan as running while we process (idempotent if already running)
     await db
       .update(scans)
       .set({ status: "running", startedAt: new Date() })
-      .where(eq(scans.id, scanId))
+      .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
   } catch (err) {
     console.error("[webhook] Failed to mark scan as running:", err)
     return NextResponse.json({ error: "Database unreachable" }, { status: 503 })
@@ -386,79 +444,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // ── 11. Finalise scan row ────────────────────────────────────────────
+  // ── 11. Per-tool accumulation only — update the running count, keep "running".
+  // The scan is finalised exclusively by the notify-complete "final" event (6a),
+  // so it can never complete before GitHub Actions finishes all jobs.
   try {
-    // Count total vulnerabilities in Aurora for this scan (may span multiple webhook calls)
     const [countResult] = await db
       .select({ count: count(vulnerabilities.id) })
       .from(vulnerabilities)
       .where(eq(vulnerabilities.scanId, scanId))
-
     const totalCount = Number(countResult?.count ?? triaged.length)
 
     await db
       .update(scans)
-      .set({
-        status: "completed",
-        completedAt: new Date(),
-        commitSha,
-        branch,
-        vulnerabilitiesCount: totalCount,
-        summary: { ...summary, riskScore },
-        error: null,
-      })
-      .where(eq(scans.id, scanId))
+      .set({ vulnerabilitiesCount: totalCount })
+      .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
   } catch (err) {
-    console.error("[webhook] Final scan update failed:", err)
+    console.error("[webhook] Per-tool count update failed (non-fatal):", err)
   }
 
-  // ── 12. Post a GitHub commit status (PR/merge gate) ───────────────────────
-  // Gate threshold is a per-tenant policy stored on the project.
-  if (commitSha) {
-    try {
-      let gateThreshold = "critical"
-      try {
-        const [proj] = await db
-          .select({ gateThreshold: projects.gateThreshold })
-          .from(projects)
-          .where(eq(projects.id, projectId))
-          .limit(1)
-        gateThreshold = proj?.gateThreshold ?? "critical"
-      } catch { /* default */ }
-
-      if (gateThreshold !== "off") {
-        await postCommitStatus({
-          repository,
-          commitSha,
-          scanId,
-          userId,
-          summary,
-          gateThreshold,
-          riskScore,
-        })
-      }
-    } catch (err) {
-      console.error("[webhook] Commit status post failed:", err)
-      // Non-fatal — the scan itself is already recorded.
-    }
-  }
-
-  // ── 13. Notify Slack/Discord if this batch met the user's threshold ───────
-  try {
-    await sendScanAlert({ userId, repository, scanId, summary })
-  } catch (err) {
-    console.error("[webhook] Scan alert failed (non-fatal):", err)
-  }
-
-  // ── 14. Revalidate dashboard RSC cache ────────────────────────────────────
   revalidatePath("/dashboard")
 
   return NextResponse.json({
     received: true,
     scanId,
     findings: triaged.length,
-    riskScore,
-    summary,
+    perTool: true,
   })
 }
 

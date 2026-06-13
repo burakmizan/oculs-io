@@ -54,7 +54,7 @@ export async function createCredentialsUser(input: {
  * Idempotent and cheap — only issues an UPDATE while the user is still on
  * the schema-default Starter plan (covers OAuth signups and older accounts).
  */
-export async function promoteStarterToPro(userId: string): Promise<void> {
+export async function promoteStarterToPro(userId: string): Promise<string> {
   const [row] = await db
     .select({ plan: users.plan })
     .from(users)
@@ -62,6 +62,22 @@ export async function promoteStarterToPro(userId: string): Promise<void> {
     .limit(1)
   if (row?.plan === "starter") {
     await db.update(users).set({ plan: "pro" }).where(eq(users.id, userId))
+    return "pro"
+  }
+  return row?.plan ?? "starter"
+}
+
+/** Reads the user's current plan for display. Defaults to "starter" on error. */
+export async function getUserPlan(userId: string): Promise<string> {
+  try {
+    const [row] = await db
+      .select({ plan: users.plan })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+    return row?.plan ?? "starter"
+  } catch {
+    return "starter"
   }
 }
 

@@ -8,6 +8,7 @@ import {
   getOwaspCoverage,
   getMttrStats,
   getRiskTrend,
+  getUserPlan,
   type RecentScanRow,
   type ProjectOption,
   type OwaspCell,
@@ -66,15 +67,17 @@ export default async function DashboardPage() {
   let owaspCells: OwaspCell[] = []
   let mttr = {} as MttrStats // Component hata vermesin diye boş state
   let riskTrend: RiskTrendPoint[] = []
+  let userPlan = "starter"
 
   try {
-    ;[stats, recent, projects, owaspCells, mttr, riskTrend] = await Promise.all([
+    ;[stats, recent, projects, owaspCells, mttr, riskTrend, userPlan] = await Promise.all([
       getDashboardStats(userId),
       getRecentScans(userId, 5),
       getUserProjects(userId),
       getOwaspCoverage(userId),
       getMttrStats(userId),
       getRiskTrend(userId, 20),
+      getUserPlan(userId),
     ])
   } catch { /* Aurora offline in local dev — show empty state */ }
 
@@ -83,9 +86,17 @@ export default async function DashboardPage() {
 
       {/* Welcome + action row */}
       <div className="mb-8 flex items-center justify-between">
-        <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
-          Welcome back, {firstName}.
-        </p>
+        <div className="flex items-center gap-2.5">
+          <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
+            Welcome back, {firstName}.
+          </p>
+          <span className={`text-[10px] font-mono uppercase tracking-[0.06em] px-2 py-0.5 rounded-[5px] border
+            ${userPlan === "pro" || userPlan === "enterprise"
+              ? "text-[#4ade80] border-[#4ade80]/30 bg-[#4ade80]/10"
+              : "text-[#888888] border-white/10 bg-white/[0.04]"}`}>
+            {userPlan.charAt(0).toUpperCase() + userPlan.slice(1)} plan
+          </span>
+        </div>
         <Link
           href="/dashboard/scans"
           className="flex items-center gap-2 h-9 px-4 rounded-[8px] bg-white text-[#000] text-[13px] font-medium hover:bg-white/90 transition-colors"

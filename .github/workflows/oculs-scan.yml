@@ -2414,7 +2414,7 @@ jobs:
       - name: POST scan summary
         run: |
           STATUS="completed"
-          PAYLOAD='{"event":"scan.completed","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'","findings":[]}'
+          PAYLOAD='{"event":"scan.completed","scanId":"'"$SCAN_ID"'","repository":"'"$REPO"'","branch":"'"$BRANCH"'","commitSha":"'"$SHA"'","final":true,"findings":[]}'
           SIG="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac '${{ secrets.OCULS_WEBHOOK_SECRET }}' | awk '{print $2}')"
           curl -fsSL -X POST "${{ secrets.OCULS_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
