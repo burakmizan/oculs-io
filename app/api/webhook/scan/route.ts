@@ -23,7 +23,7 @@ import { db } from "@/lib/db"
 import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import { sendScanAlert } from "@/lib/notify"
-import type { WebhookPayload, SeverityLevel } from "@/types"
+import type { WebhookPayload, WebhookFinding, SeverityLevel } from "@/types"
 import { analyzeFindings } from "@/lib/ai"
 
 // ---------------------------------------------------------------------------
@@ -309,9 +309,141 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { projectId, userId } = scanRow
 
+  // ── 7.5. Server-side false positive pre-filter ───────────────────────────
+  // Suppresses known false positive patterns that apply universally across ALL
+  // customer repositories — not project-specific. These are structural patterns
+  // that security tools consistently misreport regardless of the repo being scanned.
+  //
+  // This runs BEFORE AI triage to save Gemini tokens and prevent noise from
+  // reaching the database.
+  function isUniversalFalsePositive(f: WebhookFinding): boolean {
+    const filePath = (f.filePath ?? "").toLowerCase()
+    const title = (f.title ?? "").toLowerCase()
+    const description = (f.description ?? "").toLowerCase()
+    const ruleId = (f.ruleId ?? "").toLowerCase()
+    const codeSnippet = (f.codeSnippet ?? "").toLowerCase()
+
+    // ── Gitleaks: template/example files with documented placeholder values ──
+    // Any repo may have .env.example, .env.sample, .env.template with placeholder keys
+    if (f.tool === "gitleaks") {
+      const exampleFilePatterns = [
+        /\.env\.example$/i,
+        /\.env\.sample$/i,
+        /\.env\.template$/i,
+        /\.env\.dist$/i,
+        /example\.env$/i,
+        /sample\.env$/i,
+      ]
+      if (exampleFilePatterns.some(re => re.test(filePath))) return true
+
+      // Config files that contain regex PATTERNS for secret detection — not real secrets
+      const secretDetectorConfigs = [
+        /gitleaks\.toml$/i,
+        /\.gitleaks\.toml$/i,
+        /\.secrets\.baseline$/i,
+        /detect-secrets\.json$/i,
+        /\.trufflehog\.json$/i,
+        /\.pre-commit-config\.yaml$/i,
+      ]
+      if (secretDetectorConfigs.some(re => re.test(filePath))) return true
+
+      // AWS canonical documentation example keys — appear in thousands of tutorials
+      // Reference: https://docs.aws.amazon.com/general/latest/gr/aws-access-keys-best-practices.html
+      const knownExampleValues = [
+        "akiaiosfodnn7example",
+        "wjalrxutnfemi/k7mdeng/bpxrficyexamplekey",
+        "change_me",
+        "your_",
+        "example_",
+        "<your-",
+        "${your_",
+        "placeholder",
+        "dummy_",
+        "fake_",
+        "test_secret",
+        "insert_",
+        "replace_",
+      ]
+      if (knownExampleValues.some(v => codeSnippet.includes(v))) return true
+      if (knownExampleValues.some(v => description.includes(v))) return true
+    }
+
+    // ── Semgrep: GitHub Actions workflow injection false positives ────────────
+    // CWE-78 on ${{ github.* }} in workflow files — these are NOT shell-injected
+    // when used at the job env: level (which is the safe pattern)
+    if (f.tool === "semgrep") {
+      const isWorkflowFile =
+        filePath.includes(".github/workflows/") ||
+        filePath.includes(".github\\workflows\\") ||
+        (filePath.endsWith(".yml") && filePath.includes("workflow"))
+
+      if (isWorkflowFile && (ruleId.includes("cwe-78") || ruleId.includes("injection") || title.includes("injection"))) {
+        return true
+      }
+
+      // Generated/vendor directories — never real app code
+      const generatedPaths = [
+        /^node_modules\//i,
+        /^\/?\.next\//i,
+        /^\/?dist\//i,
+        /^\/?build\//i,
+        /^\/?vendor\//i,
+        /\/__pycache__\//i,
+        /\/\.yarn\//i,
+        /\/coverage\//i,
+        /package-lock\.json$/i,
+        /yarn\.lock$/i,
+        /pnpm-lock\.yaml$/i,
+      ]
+      if (generatedPaths.some(re => re.test(filePath))) return true
+    }
+
+    // ── Bearer: correct escape functions flagged as XSS ──────────────────────
+    // Bearer flags hand-rolled XML/HTML escape functions even when they are correct
+    if (f.tool === "bearer") {
+      const correctEscapeFunctions = [
+        "escapexml",
+        "escapehtml",
+        "sanitizehtml",
+        "htmlescape",
+        "xmlescape",
+        "encodehtml",
+      ]
+      if (
+        ruleId.includes("unsafe-html") &&
+        correctEscapeFunctions.some(fn => title.includes(fn) || description.includes(fn) || codeSnippet.includes(fn))
+      ) {
+        return true
+      }
+    }
+
+    // ── Universal: lock files and generated files are never real findings ─────
+    const neverScanPaths = [
+      /package-lock\.json$/i,
+      /yarn\.lock$/i,
+      /pnpm-lock\.yaml$/i,
+      /composer\.lock$/i,
+      /gemfile\.lock$/i,
+      /cargo\.lock$/i,
+      /poetry\.lock$/i,
+      /pipfile\.lock$/i,
+    ]
+    if (neverScanPaths.some(re => re.test(filePath))) return true
+
+    return false
+  }
+
+  // Apply the pre-filter — log suppressed count for observability
+  const beforeFilter = findings.length
+  const filteredFindings = findings.filter(f => !isUniversalFalsePositive(f))
+  const suppressedCount = beforeFilter - filteredFindings.length
+  if (suppressedCount > 0) {
+    console.log(`[webhook] Pre-filter suppressed ${suppressedCount}/${beforeFilter} universal false positives for scan ${scanId}`)
+  }
+
   // ── 8. Map raw findings to TriagedFinding format ─────────────────────────
   // Base mapping uses raw tool values — this is the fallback if AI triage fails.
-  const triaged = findings.map(f => ({
+  const triaged = filteredFindings.map(f => ({
     ...f,
     triageSeverity: f.severity as SeverityLevel,
     triageReasoning: "",
@@ -334,7 +466,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // if the call throws, returns fewer results, or yields an invalid severity,
   // the affected findings simply keep their raw tool values above.
   try {
-    const aiResults = await analyzeFindings(findings)
+    const aiResults = await analyzeFindings(filteredFindings)
     aiResults.forEach((ai, idx) => {
       const base = triaged[idx]
       if (!base) return
@@ -346,6 +478,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       base.owaspCategory = ai.owaspCategory || base.owaspCategory
       base.cvssScore = ai.cvssScore || base.cvssScore
       base.remediation = ai.remediation || base.remediation
+      // If AI identified this as a false positive, mark it as such in the DB
+      // so it shows in the "Muted" tab and doesn't inflate the risk score.
+      if ((ai as { isFalsePositive?: boolean }).isFalsePositive === true) {
+        base.triageSeverity = "info"
+        base.triageReasoning = `AI-identified false positive: ${ai.triageReasoning}`
+      }
     })
   } catch (err) {
     console.error("[webhook] AI triage failed — falling back to raw tool severities:", err)

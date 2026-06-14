@@ -31,6 +31,8 @@ export interface TriagedFinding extends WebhookFinding {
   cvssScore: string
   /** Plain-English remediation guidance. */
   remediation: string
+  /** True when AI determined this is a false positive (e.g. template file, placeholder value). */
+  isFalsePositive?: boolean
   /** Stable dedup hash: tool + ruleId + filePath + lineStart. */
   fingerprint: string
 }
@@ -127,7 +129,8 @@ export async function analyzeFindings(
     const batch = findings.slice(i, i + BATCH_SIZE)
 
     const prompt = `
-You are a senior application security engineer. Analyze the following security scan findings and enrich each one.
+You are a senior application security engineer triaging security scan findings from an automated scanner.
+These findings come from ARBITRARY customer repositories — not a specific known codebase.
 
 For EACH finding, return a JSON object with these exact fields:
 - triageSeverity: one of "critical" | "high" | "medium" | "low" | "info"
@@ -136,6 +139,23 @@ For EACH finding, return a JSON object with these exact fields:
 - owaspCategory: OWASP Top 10 2021 category like "A03:2021 – Injection" (empty string if not applicable)
 - cvssScore: estimated CVSS 3.1 base score as string like "8.1" (empty string if unknown)
 - remediation: specific actionable remediation steps in 2-4 sentences. CRITICAL: do NOT invent or guess specific version numbers, CVE IDs, or commit hashes. If you are not certain of the exact fixed version, write "upgrade to the latest patched version and consult the official advisory" instead of naming a version. NEVER recommend downgrading a package, and never suggest a version older than what is already installed.
+- isFalsePositive: true if this is a false positive, false otherwise
+
+FALSE POSITIVE DETECTION — set triageSeverity to "info" and isFalsePositive to true when ANY of these apply:
+
+1. SECRET IN TEMPLATE/EXAMPLE FILE: The file path contains ".env.example", ".env.sample", ".env.template", ".env.dist", "example.env", or similar. These files contain documented placeholder values, NOT real credentials.
+
+2. SECRET DETECTOR CONFIG FILE: The file is a secret-scanning config (gitleaks.toml, .secrets.baseline, detect-secrets.json, .pre-commit-config.yaml). These contain regex PATTERNS for finding secrets, not actual secret values.
+
+3. KNOWN PLACEHOLDER VALUES: The finding's code snippet or description contains known placeholder strings: "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI", "CHANGE_ME", "YOUR_*", "example_*", "placeholder", "dummy_", "fake_", "<your-", "\${YOUR_", "INSERT_HERE", "REPLACE_WITH".
+
+4. CI/CD WORKFLOW INJECTION FALSE POSITIVE: The file is a GitHub Actions workflow (.github/workflows/*.yml) and the finding is CWE-78 / command injection related to \${{ github.* }} expressions. These are safe when used at the job env: level — they are NOT shell-injected.
+
+5. GENERATED/VENDOR CODE: The file path starts with node_modules/, .next/, dist/, build/, vendor/, __pycache__/, coverage/. These are not developer-authored code.
+
+6. LOCK FILE: The file is package-lock.json, yarn.lock, pnpm-lock.yaml, composer.lock, Gemfile.lock, Cargo.lock, poetry.lock, Pipfile.lock. Vulnerabilities in lock files are reported by dependency scanners and handled separately — do not flag them as code vulnerabilities.
+
+7. CORRECTLY IMPLEMENTED SANITIZATION FLAGGED AS XSS: The finding title mentions a custom escape or sanitize function (escapeXml, escapeHtml, sanitizeHtml, htmlEscape, xmlEscape) AND the code snippet shows it correctly escaping <, >, &, ', " characters. A correct implementation is NOT a vulnerability.
 
 Respond with a JSON array of exactly ${batch.length} objects, one per finding, in the same order as the input.
 Do NOT include any text outside the JSON array.
@@ -151,6 +171,7 @@ ${JSON.stringify(batch, null, 2)}
       owaspCategory: string
       cvssScore: string
       remediation: string
+      isFalsePositive?: boolean
     }>
 
     try {
@@ -166,6 +187,7 @@ ${JSON.stringify(batch, null, 2)}
         owaspCategory: f.owaspCategory ?? "",
         cvssScore: f.cvssScore ?? "",
         remediation: "Refer to tool documentation for remediation guidance.",
+        isFalsePositive: false,
       }))
     }
 
@@ -177,6 +199,7 @@ ${JSON.stringify(batch, null, 2)}
         owaspCategory: "",
         cvssScore: "",
         remediation: "",
+        isFalsePositive: false,
       }
       results.push({
         ...finding,
@@ -186,6 +209,7 @@ ${JSON.stringify(batch, null, 2)}
         owaspCategory: enriched.owaspCategory || finding.owaspCategory || "",
         cvssScore: enriched.cvssScore || finding.cvssScore || "",
         remediation: enriched.remediation,
+        isFalsePositive: enriched.isFalsePositive ?? false,
         fingerprint: makeFingerprint(finding),
       })
     })
