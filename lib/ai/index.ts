@@ -107,6 +107,75 @@ function makeFingerprint(f: WebhookFinding): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GitHub file fetcher — fetches actual source lines for AI context
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetches a slice of a file from the customer's GitHub repository.
+ * Used to give Gemini real code context so it can accurately judge
+ * whether a finding is a true positive or a false positive.
+ *
+ * Returns at most 60 lines centered around the finding's line number.
+ * Returns null if the file cannot be fetched (private repo without token,
+ * network error, binary file, etc.) — callers must handle null gracefully.
+ */
+async function fetchFileSlice(
+  repository: string,      // "owner/repo"
+  filePath: string,        // relative path e.g. "src/auth/login.ts"
+  lineStart: number | null,
+  githubToken: string | null,
+): Promise<string | null> {
+  if (!filePath || !repository) return null
+
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github.raw+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if (githubToken) headers["Authorization"] = `Bearer ${githubToken}`
+
+    // GitHub raw content API — returns the file as plain text
+    const url = `https://api.github.com/repos/${repository}/contents/${encodeURIComponent(filePath)}`
+    const res = await fetch(url, { headers })
+
+    if (!res.ok) return null
+
+    // GitHub returns base64-encoded content in JSON; use raw+json to get plain text
+    const contentType = res.headers.get("content-type") ?? ""
+    let raw: string
+
+    if (contentType.includes("application/json")) {
+      // Fallback: JSON response with base64
+      const json = await res.json() as { content?: string; encoding?: string }
+      if (!json.content || json.encoding !== "base64") return null
+      raw = Buffer.from(json.content.replace(/\n/g, ""), "base64").toString("utf-8")
+    } else {
+      // Raw text response
+      raw = await res.text()
+    }
+
+    // Return a focused window of lines around the finding
+    const lines = raw.split("\n")
+    const total = lines.length
+
+    if (!lineStart || lineStart < 1) {
+      // No line hint — return first 40 lines for context
+      return lines.slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join("\n")
+    }
+
+    // 30 lines before, 30 lines after the flagged line
+    const from = Math.max(0, lineStart - 30)
+    const to = Math.min(total, lineStart + 30)
+    return lines
+      .slice(from, to)
+      .map((l, i) => `${from + i + 1}${from + i + 1 === lineStart ? " ◄" : "  "}: ${l}`)
+      .join("\n")
+  } catch {
+    return null
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 1. analyzeFindings — triage a batch of raw scan findings
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -119,6 +188,8 @@ function makeFingerprint(f: WebhookFinding): string {
  */
 export async function analyzeFindings(
   findings: WebhookFinding[],
+  repository?: string,
+  githubToken?: string,
 ): Promise<TriagedFinding[]> {
   if (findings.length === 0) return []
 
@@ -127,6 +198,25 @@ export async function analyzeFindings(
 
   for (let i = 0; i < findings.length; i += BATCH_SIZE) {
     const batch = findings.slice(i, i + BATCH_SIZE)
+
+    // Fetch real file content for each finding in this batch so Gemini can
+    // see the actual code, not just the tool's snippet. This dramatically
+    // improves false positive detection accuracy for SAST findings.
+    const batchWithContext = await Promise.all(
+      batch.map(async (f) => {
+        // Skip fetch if: no file path, already has a long code snippet, or DAST finding
+        if (!f.filePath || (f.codeSnippet && f.codeSnippet.length > 200) || f.targetUrl) {
+          return { ...f, _fetchedContext: null as string | null }
+        }
+        const slice = await fetchFileSlice(
+          repository ?? "",
+          f.filePath,
+          f.lineStart ?? null,
+          githubToken ?? null,
+        )
+        return { ...f, _fetchedContext: slice }
+      })
+    )
 
     const prompt = `
 You are a senior application security engineer triaging security scan findings from an automated scanner.
@@ -160,8 +250,18 @@ FALSE POSITIVE DETECTION — set triageSeverity to "info" and isFalsePositive to
 Respond with a JSON array of exactly ${batch.length} objects, one per finding, in the same order as the input.
 Do NOT include any text outside the JSON array.
 
-INPUT FINDINGS:
-${JSON.stringify(batch, null, 2)}
+INPUT FINDINGS (with real file context where available):
+${JSON.stringify(
+  batchWithContext.map(({ _fetchedContext, ...f }) => ({
+    ...f,
+    // Replace short tool snippet with full fetched context when available
+    codeSnippet: _fetchedContext
+      ? `[FETCHED FROM REPO — ${f.filePath}]\n${_fetchedContext}`
+      : (f.codeSnippet ?? null),
+  })),
+  null,
+  2,
+)}
 `
 
     let parsed: Array<{

@@ -309,6 +309,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { projectId, userId } = scanRow
 
+  // Fetch the customer's GitHub token so analyzeFindings can read actual file
+  // content for accurate false positive detection. Non-fatal if unavailable.
+  let githubToken: string | null = null
+  try {
+    const [acct] = await db
+      .select({ access_token: accounts.access_token })
+      .from(accounts)
+      .where(eq(accounts.userId, userId))
+      .limit(1)
+    githubToken = acct?.access_token ?? null
+  } catch {
+    // Non-fatal — AI will use tool-provided snippet only
+  }
+
   // ── 7.5. Server-side false positive pre-filter ───────────────────────────
   // Suppresses known false positive patterns that apply universally across ALL
   // customer repositories — not project-specific. These are structural patterns
@@ -466,7 +480,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // if the call throws, returns fewer results, or yields an invalid severity,
   // the affected findings simply keep their raw tool values above.
   try {
-    const aiResults = await analyzeFindings(filteredFindings)
+    const aiResults = await analyzeFindings(filteredFindings, repository, githubToken ?? undefined)
     aiResults.forEach((ai, idx) => {
       const base = triaged[idx]
       if (!base) return

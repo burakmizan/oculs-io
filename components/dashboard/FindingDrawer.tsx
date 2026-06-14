@@ -104,6 +104,14 @@ export function FindingDrawer({ finding, onClose }: { finding: FindingRow | null
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
+                {/* FALSE POSITIVE badge — shown ONLY when AI or user marked it as such */}
+                {finding.status === "false_positive" && (
+                  <span className="inline-flex items-center h-5 px-2 rounded-[4px] border
+                                   border-[#f87171]/40 bg-[#f87171]/10 text-[#f87171]
+                                   text-[10px] font-mono uppercase tracking-[0.04em]">
+                    False Positive
+                  </span>
+                )}
                 <span className={`inline-flex items-center h-5 px-2 rounded-[4px] border text-[10px] font-mono uppercase tracking-[0.04em] ${sev.badge}`}>
                   {finding.severity}
                 </span>
