@@ -248,7 +248,7 @@ export function Sidebar({ user, plan = "starter" }: { user: SidebarUser; plan?: 
                   {activeTeam.name}
                 </span>
                 <span className="px-1.5 py-0.5 rounded-[4px] bg-white/[0.08] text-[10px] text-[#888888] uppercase tracking-wider font-mono">
-                  {activeTeam.id === "personal" ? "Hobby" : "Free"}
+                  {activeTeam.id === "personal" ? planLabel : "Team"}
                 </span>
               </div>
               <ChevronDown size={14} className="text-[#666666] flex-shrink-0 ml-auto" />
@@ -363,7 +363,7 @@ export function Sidebar({ user, plan = "starter" }: { user: SidebarUser; plan?: 
                 <p className="text-[12px] text-white truncate" style={{ letterSpacing: "-0.24px" }}>{displayName}</p>
                 <span className={`flex-shrink-0 text-[9px] font-mono uppercase tracking-[0.06em] px-1.5 py-0.5 rounded-[4px] border
                   ${isPaid
-                    ? "text-[#4ade80] border-[#4ade80]/30 bg-[#4ade80]/10"
+                    ? "text-[#E7000B] border-[#E7000B]/30 bg-[#E7000B]/10"
                     : "text-[#888888] border-white/10 bg-white/[0.04]"}`}>
                   {planLabel}
                 </span>

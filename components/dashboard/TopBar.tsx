@@ -12,8 +12,9 @@ const PAGE_TITLES: Record<string, string> = {
   "/dashboard/settings":    "Settings",
 }
 
-export function TopBar() {
+export function TopBar({ plan = "starter" }: { plan?: string }) {
   const pathname = usePathname()
+  const isPaid = plan === "pro" || plan === "enterprise"
   const title = PAGE_TITLES[pathname] ?? "Dashboard"
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
@@ -39,9 +40,15 @@ export function TopBar() {
 
         {/* Sağ: Pro Butonu ve 3 Nokta Menüsü */}
         <div className="flex-1 flex items-center justify-end gap-3">
-          <button className="h-7 px-4 rounded-[6px] text-[12px] font-medium transition-colors bg-white text-black hover:bg-white/90">
-            Upgrade to Pro
-          </button>
+          {isPaid ? (
+            <span className="h-7 px-3 inline-flex items-center rounded-[6px] text-[11px] font-mono uppercase tracking-[0.06em] text-[#E7000B] border border-[#E7000B]/30 bg-[#E7000B]/10">
+              {plan === "enterprise" ? "Enterprise" : "Pro"}
+            </span>
+          ) : (
+            <button className="h-7 px-4 rounded-[6px] text-[12px] font-medium transition-colors bg-white text-black hover:bg-white/90">
+              Upgrade to Pro
+            </button>
+          )}
 
           <div className="relative">
             <button

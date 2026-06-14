@@ -30,6 +30,16 @@ const EMPTY_STATS: DashboardStats = {
   riskScore: null,
 }
 
+/** Plan-aware display limits for the Usage card. null = unlimited (∞). */
+const PLAN_META: Record<
+  string,
+  { label: string; scans: number | null; projects: number | null; findings: number | null }
+> = {
+  starter:    { label: "Free Plan",       scans: 3,    projects: 1,    findings: 500  },
+  pro:        { label: "Pro Plan",         scans: 50,   projects: null, findings: null },
+  enterprise: { label: "Enterprise Plan",  scans: null, projects: null, findings: null },
+}
+
 function RiskBadge({ score }: { score: number | null }) {
   if (score === null) return <span className="text-[#444444]">—</span>
   const color =
@@ -37,18 +47,21 @@ function RiskBadge({ score }: { score: number | null }) {
   return <span className={color}>{score}</span>
 }
 
-function UsageBar({ used, total, label }: { used: number; total: number; label: string }) {
-  const pct = total === 0 ? 0 : Math.min(100, Math.round((used / total) * 100))
+function UsageBar({ used, total, label }: { used: number; total: number | null; label: string }) {
+  const unlimited = total === null
+  const pct = unlimited || total === 0 ? 0 : Math.min(100, Math.round((used / total) * 100))
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-mono text-[#555555] uppercase tracking-[0.06em]">{label}</span>
-        <span className="text-[11px] font-mono text-[#666666]">{used.toLocaleString()} / {total.toLocaleString()}</span>
+        <span className="text-[11px] font-mono text-[#666666]">
+          {used.toLocaleString()} / {unlimited ? "∞" : total.toLocaleString()}
+        </span>
       </div>
       <div className="h-1 bg-white/[0.06] rounded-full overflow-hidden">
         <div
           className="h-full bg-white/30 rounded-full transition-all"
-          style={{ width: `${pct}%` }}
+          style={{ width: unlimited ? "100%" : `${pct}%`, opacity: unlimited ? 0.25 : 1 }}
         />
       </div>
     </div>
@@ -81,6 +94,8 @@ export default async function DashboardPage() {
     ])
   } catch { /* Aurora offline in local dev — show empty state */ }
 
+  const planMeta = PLAN_META[userPlan] ?? PLAN_META.starter
+
   return (
     <div className="p-8 max-w-[1100px] mx-auto">
 
@@ -92,7 +107,7 @@ export default async function DashboardPage() {
           </p>
           <span className={`text-[10px] font-mono uppercase tracking-[0.06em] px-2 py-0.5 rounded-[5px] border
             ${userPlan === "pro" || userPlan === "enterprise"
-              ? "text-[#4ade80] border-[#4ade80]/30 bg-[#4ade80]/10"
+              ? "text-[#E7000B] border-[#E7000B]/30 bg-[#E7000B]/10"
               : "text-[#888888] border-white/10 bg-white/[0.04]"}`}>
             {userPlan.charAt(0).toUpperCase() + userPlan.slice(1)} plan
           </span>
@@ -219,17 +234,17 @@ export default async function DashboardPage() {
                 {session?.user?.email ?? session?.user?.login ?? "—"}
               </p>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80]" />
-                <span className="text-[11px] font-mono text-[#4ade80]">Free Plan</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#E7000B]" />
+                <span className="text-[11px] font-mono text-[#E7000B]">{planMeta.label}</span>
               </div>
             </div>
 
             <div className="h-px bg-white/[0.06]" />
 
             {/* Usage bars */}
-            <UsageBar used={stats.scans} total={3} label="Scans / month" />
-            <UsageBar used={stats.projects} total={1} label="Projects" />
-            <UsageBar used={stats.openVulnerabilities} total={500} label="Active findings" />
+            <UsageBar used={stats.scans} total={planMeta.scans} label="Scans / month" />
+            <UsageBar used={stats.projects} total={planMeta.projects} label="Projects" />
+            <UsageBar used={stats.openVulnerabilities} total={planMeta.findings} label="Active findings" />
 
             <div className="h-px bg-white/[0.06]" />
 
