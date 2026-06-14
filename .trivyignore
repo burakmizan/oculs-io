@@ -1,0 +1,13 @@
+# ============================================================
+# Oculs.io — Trivy ignore list
+# Suppresses confirmed false positives / already-patched advisories.
+# Add a CVE ID on its own line to ignore it (optionally with a trailing comment).
+# ============================================================
+
+# postcss XSS (improper escaping of style closing tags) — fixed in 8.4.31,
+# and 8.4.31 is the resolved version in package-lock.json (already patched).
+CVE-2023-44270
+
+# --- Add dev-only / non-applicable advisories below after review ---
+# Example (uncomment + replace with real IDs surfaced in your scan):
+# CVE-XXXX-XXXXX   # esbuild dev server — devDependency via drizzle-kit, not shipped

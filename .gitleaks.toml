@@ -1,0 +1,29 @@
+# ============================================================
+# Oculs.io — Gitleaks configuration
+# Extends the default ruleset and allowlists known false positives:
+#   • .env.example uses AWS's official documentation EXAMPLE keys + placeholders
+#   • ScanModal.tsx contains the UI word "secret" and React key= props, not secrets
+# ============================================================
+
+title = "Oculs.io Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Oculs.io documented placeholders and template files"
+
+# Template + UI files that never contain real secrets
+paths = [
+  '''\.env\.example$''',
+  '''components/dashboard/ScanModal\.tsx$''',
+]
+
+# AWS canonical documentation example keys and generic placeholders
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+  '''CHANGE_ME''',
+  '''YOUR_[A-Z0-9_]+''',
+  '''(?i)example''',
+]

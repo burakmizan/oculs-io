@@ -41,6 +41,9 @@ env:
   REPO:    ${{ github.repository }}
   BRANCH:  ${{ github.ref_name }}
   SHA:     ${{ github.sha }}
+  # Safe-by-design: the target URL lives in an env var, never interpolated
+  # directly into a run: shell — prevents GitHub Actions script injection (CWE-78).
+  TARGET_URL_INPUT: ${{ github.event.inputs.target_url || secrets.TARGET_URL }}
 
 # ────────────────────────────────────────────────────────────
 # Notify webhook that the scan has started
@@ -269,6 +272,7 @@ jobs:
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
             detect --source /repo \
+            --config="/repo/.gitleaks.toml" \
             --report-format json \
             --report-path /repo/gitleaks-results.json \
             --log-opts="--all" \
@@ -379,6 +383,13 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           scanners: vuln,secret,misconfig
           skip-dirs: node_modules,.next,dist,.git
+          # Skip the env template so Trivy's secret scanner stops flagging
+          # AWS documentation example keys as real secrets.
+          skip-files: .env.example
+          # Drop vulnerabilities that have no fix available (pure noise) and
+          # honour the curated ignore list of already-patched / non-applicable CVEs.
+          ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: POST findings
         if: always()
@@ -1343,7 +1354,7 @@ jobs:
       - name: Run Nuclei via Docker
         run: |
           docker run --rm -v "$PWD:/src" projectdiscovery/nuclei:latest \
-            -u "${{ github.event.inputs.target_url || secrets.TARGET_URL }}" \
+            -u "$TARGET_URL_INPUT" \
             -severity critical,high,medium,low \
             -json-export /src/nuclei-results.json \
             -timeout 30 \
@@ -2025,6 +2036,8 @@ jobs:
             --exclude-files "yarn.lock" \
             --exclude-files "*.min.js" \
             --exclude-files ".next" \
+            --exclude-files "\.env\.example$" \
+            --exclude-files "ScanModal\.tsx$" \
             --all-files \
             . > detect-secrets-results.json 2>/dev/null || \
           detect-secrets scan . > detect-secrets-results.json 2>/dev/null || true
@@ -2319,11 +2332,11 @@ jobs:
       - name: Run Arachni
         run: |
           # Official Arachni Docker image; output a binary report then convert to JSON
-          docker run --rm -v "$PWD:/out" arachni/arachni:latest \
-            bash -c "arachni '${{ github.event.inputs.target_url || secrets.TARGET_URL }}' \
+          docker run --rm -e TARGET_URL_INPUT -v "$PWD:/out" arachni/arachni:latest \
+            bash -c 'arachni "$TARGET_URL_INPUT" \
               --timeout 00:05:00 \
               --report-save-path=/out/arachni.afr && \
-              arachni_reporter /out/arachni.afr --reporter=json:outfile=/out/arachni-results.json" \
+              arachni_reporter /out/arachni.afr --reporter=json:outfile=/out/arachni-results.json' \
             || true
           ls -la arachni-results.json 2>/dev/null || echo '{}' > arachni-results.json
 

@@ -135,7 +135,7 @@ For EACH finding, return a JSON object with these exact fields:
 - cweId: CWE identifier string like "CWE-89" (empty string if unknown)
 - owaspCategory: OWASP Top 10 2021 category like "A03:2021 – Injection" (empty string if not applicable)
 - cvssScore: estimated CVSS 3.1 base score as string like "8.1" (empty string if unknown)
-- remediation: specific actionable remediation steps in 2-4 sentences
+- remediation: specific actionable remediation steps in 2-4 sentences. CRITICAL: do NOT invent or guess specific version numbers, CVE IDs, or commit hashes. If you are not certain of the exact fixed version, write "upgrade to the latest patched version and consult the official advisory" instead of naming a version. NEVER recommend downgrading a package, and never suggest a version older than what is already installed.
 
 Respond with a JSON array of exactly ${batch.length} objects, one per finding, in the same order as the input.
 Do NOT include any text outside the JSON array.
