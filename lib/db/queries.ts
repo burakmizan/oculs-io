@@ -651,6 +651,8 @@ export interface VulnerabilityRow {
   createdAt: Date
   repoFullName: string
   scanId: string
+  description?: string | null
+  codeSnippet?: string | null
 }
 
 export async function getVulnerabilities(
@@ -816,6 +818,8 @@ export async function getVulnerabilitiesByScan(
       createdAt: vulnerabilities.createdAt,
       repoFullName: projects.repoFullName,
       scanId: vulnerabilities.scanId,
+      description: vulnerabilities.description,
+      codeSnippet: vulnerabilities.codeSnippet,
     })
     .from(vulnerabilities)
     .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))

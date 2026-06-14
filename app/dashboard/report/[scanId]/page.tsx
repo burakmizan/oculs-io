@@ -9,6 +9,7 @@ import {
   type VulnerabilityRow,
 } from "@/lib/db/queries"
 import { ReportAI } from "@/components/dashboard/ReportAI"
+import { ReportAIStep } from "@/components/dashboard/ReportAIStep"
 import { ShareReportButton } from "@/components/dashboard/ShareReportButton"
 
 export const metadata: Metadata = { title: "Scan Report" }
@@ -35,10 +36,13 @@ function SeverityBadge({ severity }: { severity: string }) {
 
 interface Props {
   params: Promise<{ scanId: string }>
+  searchParams: Promise<{ step?: string }>
 }
 
-export default async function ReportPage({ params }: Props) {
+export default async function ReportPage({ params, searchParams }: Props) {
   const { scanId } = await params
+  const { step: stepParam } = await searchParams
+  const step = stepParam === "2" ? 2 : 1
   const session = await auth()
   const userId = session!.user.id
 
@@ -47,6 +51,7 @@ export default async function ReportPage({ params }: Props) {
   let scanDate: Date | null = null
   let isDastScan = false
   let shareToken: string | null = null
+  let repository = ""
 
   try {
     vulns = await getVulnerabilitiesByScan(scanId, userId)
@@ -56,6 +61,7 @@ export default async function ReportPage({ params }: Props) {
     // Don't notFound() — scan may be queued/running with no vulns yet
     if (scan) {
       repoName = scan.repoFullName
+      repository = scan.repoFullName
       scanDate = scan.completedAt ?? scan.createdAt
       if ((scan as any).targetUrl || (scan as any).summary?.targetUrl) {
         isDastScan = true
@@ -184,20 +190,32 @@ export default async function ReportPage({ params }: Props) {
         ))}
       </div>
 
-      {/* AI Report */}
-      <div className="mb-2">
-        <p className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#444444]">
-          AI Analysis — {repoName}
-        </p>
+      {/* Step tabs */}
+      <div className="flex items-center gap-1 mb-6 border border-white/10 rounded-[8px] p-0.5 w-fit bg-white/[0.02]">
+        <Link
+          href={`/dashboard/report/${scanId}?step=1`}
+          className={`h-8 px-4 flex items-center rounded-[6px] text-[12px] font-mono transition-colors
+            ${step === 1 ? "bg-white/[0.10] text-white" : "text-[#666666] hover:text-white"}`}
+        >
+          Findings
+        </Link>
+        <Link
+          href={`/dashboard/report/${scanId}?step=2`}
+          className={`h-8 px-4 flex items-center rounded-[6px] text-[12px] font-mono transition-colors gap-2
+            ${step === 2 ? "bg-white/[0.10] text-white" : "text-[#666666] hover:text-white"}`}
+        >
+          AI Analysis
+          <span className="inline-flex items-center h-4 px-1.5 rounded-[3px] bg-[#60a5fa]/15
+                           text-[#60a5fa] text-[9px] font-mono uppercase tracking-[0.04em]">
+            Gemini
+          </span>
+        </Link>
       </div>
-      <ReportAI
-        scanId={scanId}
-        repoName={repoName}
-        findings={deduped}
-      />
 
-      {/* Findings table */}
-      <div className="bg-white/[0.02] border border-white/10 rounded-[12px] overflow-hidden mt-6">
+      {step === 1 && (
+        <>
+          {/* Step 1: Findings table */}
+          <div className="bg-white/[0.02] border border-white/10 rounded-[12px] overflow-hidden">
         <div className="px-5 py-3.5 border-b border-white/[0.07]
                         grid grid-cols-[1fr_90px_90px_140px_60px]
                         gap-4 text-[10px] font-mono uppercase tracking-[0.06em] text-[#444444]">
@@ -280,11 +298,22 @@ export default async function ReportPage({ params }: Props) {
               ))}
           </ul>
         )}
-      </div>
+          </div>
 
-      <p className="mt-3 text-[11px] font-mono text-[#333333] text-right">
-        {deduped.length} unique findings ({vulns.length} total)
-      </p>
+          <p className="mt-3 text-[11px] font-mono text-[#333333] text-right">
+            {deduped.length} unique findings ({vulns.length} total)
+          </p>
+        </>
+      )}
+
+      {step === 2 && (
+        <ReportAIStep
+          scanId={scanId}
+          repoName={repoName}
+          repository={repository}
+          findings={deduped}
+        />
+      )}
     </div>
   )
 }
