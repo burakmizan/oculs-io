@@ -364,6 +364,99 @@ jobs:
           OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
           OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
 
+  # ── TruffleHog — deep secret scanning with git history ─────────────────
+  trufflehog:
+    name: Secrets — TruffleHog
+    runs-on: ubuntu-latest
+    needs: notify-start
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog
+        run: |
+          # TruffleHog v3 — scans git history for verified secrets
+          docker run --rm \
+            -v "$PWD:/repo" \
+            trufflesecurity/trufflehog:latest \
+            git file:///repo \
+            --json \
+            --no-update \
+            --only-verified \
+            > trufflehog-results.json 2>/dev/null || true
+          echo "[trufflehog] Result lines: $(wc -l < trufflehog-results.json 2>/dev/null || echo 0)"
+
+      - name: POST findings
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, hmac, hashlib, urllib.request, re
+
+          scan_id = os.environ.get("SCAN_ID", "")
+          if not scan_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', scan_id):
+              print(f"[trufflehog] No valid SCAN_ID, skipping")
+              import sys; sys.exit(0)
+
+          findings = []
+          # TruffleHog outputs one JSON object per line (NDJSON format)
+          try:
+              with open("trufflehog-results.json") as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line:
+                          continue
+                      try:
+                          r = json.loads(line)
+                      except Exception:
+                          continue
+                      detector = r.get("DetectorName", "unknown")
+                      verified = r.get("Verified", False)
+                      source_meta = r.get("SourceMetadata", {}).get("Data", {}).get("Git", {})
+                      file_path = source_meta.get("file", "")
+                      commit = source_meta.get("commit", "")
+                      # Only verified = real credentials, not just pattern matches
+                      sev = "critical" if verified else "high"
+                      findings.append({
+                          "tool": "gitleaks",  # grouped with secrets tools in UI
+                          "ruleId": f"trufflehog-{detector}",
+                          "title": f"Verified secret: {detector}",
+                          "description": f"TruffleHog detected a verified {detector} credential. Commit: {commit[:8] if commit else 'unknown'}",
+                          "severity": sev,
+                          "filePath": file_path or None,
+                          "lineStart": None,
+                          "cweId": "CWE-798",
+                      })
+          except Exception as e:
+              print(f"[trufflehog] Parse error: {e}")
+
+          print(f"[trufflehog] Sending {len(findings)} findings")
+
+          payload = json.dumps({
+              "event":      "scan.completed",
+              "scanId":     scan_id,
+              "repository": os.environ["REPO"],
+              "branch":     os.environ["BRANCH"],
+              "commitSha":  os.environ["SHA"],
+              "findings":   findings,
+          })
+
+          secret = os.environ["OCULS_WEBHOOK_SECRET"].encode()
+          sig = "sha256=" + hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["OCULS_WEBHOOK_URL"],
+              data=payload.encode(),
+              headers={"Content-Type": "application/json", "X-Oculs-Signature-256": sig},
+              method="POST"
+          )
+          with urllib.request.urlopen(req) as res:
+              print(f"[trufflehog] Webhook: {res.status}")
+          EOF
+        env:
+          OCULS_WEBHOOK_URL:    ${{ secrets.OCULS_WEBHOOK_URL }}
+          OCULS_WEBHOOK_SECRET: ${{ secrets.OCULS_WEBHOOK_SECRET }}
+
   # ── 3. Trivy ─────────────────────────────────────────────
   trivy:
     name: Infra — Trivy
@@ -919,11 +1012,13 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
+          queries: security-extended,security-and-quality
           build-mode: none
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
         with:
+          category: "/language:javascript-typescript"
           output: codeql-results
           upload: false
 
@@ -1918,6 +2013,25 @@ jobs:
             echo "[npm-audit] Found $VUL_COUNT vulnerable packages"
           fi
 
+      - name: Generate dependency graph
+        run: |
+          # Generate full transitive dependency tree for SBOM-style visibility
+          if [ -f "package.json" ]; then
+            npm install --ignore-scripts --prefer-offline 2>/dev/null || true
+            npm ls --json --all > npm-dep-graph.json 2>/dev/null || echo '{}' > npm-dep-graph.json
+            DEP_COUNT=$(python3 -c "
+          import json
+          try:
+              d = json.load(open('npm-dep-graph.json'))
+              def count(node):
+                  deps = node.get('dependencies', {}) or {}
+                  return len(deps) + sum(count(v) for v in deps.values())
+              print(count(d))
+          except: print(0)
+            " 2>/dev/null || echo "0")
+            echo "[dep-graph] Total dependencies (including transitive): $DEP_COUNT"
+          fi
+
       - name: POST findings
         if: always()
         run: |
@@ -1951,8 +2065,9 @@ jobs:
               severity_raw = vuln.get("severity", "low")
               severity     = SEV_MAP.get(severity_raw, "medium")
 
-              # Only report medium and above to reduce noise
-              if severity_raw in ("low", "info"):
+              # Report all severities but tag low/info differently
+              # Transitive deps included — npm audit --json already covers them
+              if severity_raw in ("info",):
                   continue
 
               via = vuln.get("via", [])
@@ -1977,11 +2092,14 @@ jobs:
                   continue
               seen.add(dedup)
 
+              # Detect if this is a transitive (indirect) dependency
+              is_direct = not vuln.get("isDirect") is False
+              dep_type = "direct" if is_direct else "transitive"
               findings.append({
                   "tool":        "trivy",  # mapped to trivy for UI grouping
                   "ruleId":      cve_ids[0] if cve_ids else f"npm-{pkg_name}",
                   "title":       title[:120],
-                  "description": vuln.get("detail", vuln.get("overview", ""))[:500],
+                  "description": (vuln.get("detail", vuln.get("overview", "")) or "") + f" [{dep_type} dependency]",
                   "severity":    severity,
                   "filePath":    "package.json",
                   "cweId":       "",
@@ -2404,6 +2522,7 @@ jobs:
     needs:
       - semgrep
       - gitleaks
+      - trufflehog
       - trivy
       - horusec
       - bearer

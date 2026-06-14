@@ -1,0 +1,27 @@
+# Oculs.io — Semgrep ignore list
+# Exclude files that produce noise but are not production app code
+
+# The workflow file itself — scanning CI config produces false positives
+# (e.g. CWE-78 on ${{ github.* }} expressions which are not shell-injected)
+.github/workflows/oculs-scan.yml
+
+# Dependency lock files — not app code
+package-lock.json
+
+yarn.lock
+
+pnpm-lock.yaml
+
+# Generated Next.js build output
+.next/
+
+# Node modules
+node_modules/
+
+# Drizzle generated migrations (SQL, not app logic)
+lib/db/migrations/
+
+# Test fixtures and example env files
+.env.example
+
+.gitleaks.toml

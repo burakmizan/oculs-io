@@ -28,6 +28,8 @@ function grade(score: number, hasCritical: boolean): { letter: string; color: st
   return { letter: "F", color: "#f87171" }
 }
 
+// bearer:disable javascript/lang/unsafe-html-concatenation
+// escapeXml: full XML character escape — <>&'" covered; projectId is DB-validated UUID
 function escapeXml(s: string): string {
   return s.replace(/[<>&'"]/g, (c) =>
     ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c] ?? c),

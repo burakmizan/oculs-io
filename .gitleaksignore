@@ -1,0 +1,13 @@
+# Oculs.io — Gitleaks ignore file
+# These are known false positives documented in .gitleaks.toml
+
+# .env.example uses AWS canonical documentation example keys (not real):
+# AKIAIOSFODNN7EXAMPLE and wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+# Reference: https://docs.aws.amazon.com/general/latest/gr/aws-access-keys-best-practices.html
+.env.example
+
+# .gitleaks.toml contains regex patterns that LOOK like secrets (they are patterns, not values)
+.gitleaks.toml
+
+# ScanModal.tsx contains the UI word "secret" in checkbox labels, not real secrets
+components/dashboard/ScanModal.tsx
