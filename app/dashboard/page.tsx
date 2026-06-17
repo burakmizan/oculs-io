@@ -131,12 +131,6 @@ export default async function DashboardPage() {
       {/* Risk trend */}
       <RiskTrend points={riskTrend} />
 
-      {/* MTTR KPIs */}
-      <MttrCard stats={mttr} />
-
-      {/* OWASP Top 10 coverage */}
-      <OwaspGrid cells={owaspCells} />
-
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
@@ -156,6 +150,76 @@ export default async function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Recent scans */}
+      <div className="bg-white/[0.02] border border-white/10 rounded-[12px] mb-8">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.07]">
+          <h2 className="text-[13px] font-mono uppercase tracking-[0.08em] text-[#a1a1aa]">
+            Recent Scans
+          </h2>
+          {recent.length > 0 && (
+            <Link href="/dashboard/scans" className="text-[11px] font-mono text-[#555555] hover:text-[#a1a1aa] transition-colors">
+              View all →
+            </Link>
+          )}
+        </div>
+
+        {recent.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center gap-4">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-[#333333]">
+              <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7l-9-5z" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <div>
+              <p className="text-[13px] font-medium text-white mb-1" style={{ letterSpacing: "-0.26px" }}>Run your first scan</p>
+              <p className="text-[12px] text-[#555555] max-w-[260px]">Connect a repository and scan it — results appear here in under 60 seconds.</p>
+            </div>
+            <Link href="/dashboard/scans"
+              className="h-8 px-4 rounded-[7px] border border-white/10 text-[12px] font-mono text-[#a1a1aa] hover:bg-white/5 hover:text-white transition-colors">
+              Start scanning →
+            </Link>
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/[0.05]">
+            {recent.map((scan) => {
+              const statusColor: Record<string, string> = {
+                completed: "bg-[#4ade80]", running: "bg-[#60a5fa]",
+                failed: "bg-[#f87171]", queued: "bg-[#a1a1aa]", pending: "bg-[#666666]",
+              }
+              const dot = statusColor[scan.status] ?? "bg-[#666666]"
+              const diff = Date.now() - new Date(scan.createdAt).getTime()
+              const mins = Math.round(diff / 60000)
+              const age = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`
+              return (
+                <li key={scan.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.02] transition-colors">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-mono text-white truncate" style={{ letterSpacing: "-0.14px" }}>
+                      {scan.repoFullName}
+                    </p>
+                    <p className="text-[11px] text-[#555555] mt-0.5">
+                      {scan.tools.slice(0, 3).join(" · ")}{scan.tools.length > 3 ? ` · +${scan.tools.length - 3}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[13px] text-white tabular-nums">{scan.vulnerabilitiesCount}</p>
+                    <p className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#444444]">findings</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 w-[80px] justify-end">
+                    <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+                    <span className="text-[12px] text-[#a1a1aa] capitalize">{scan.status}</span>
+                  </div>
+                  <span className="text-[11px] font-mono text-[#444444] w-[60px] text-right">{age}</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* MTTR KPIs */}
+      <MttrCard stats={mttr} />
+
+      {/* OWASP Top 10 coverage */}
+      <OwaspGrid cells={owaspCells} />
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
@@ -276,59 +340,6 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Recent scans */}
-      <div className="bg-white/[0.02] border border-white/10 rounded-[12px]">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.07]">
-          <h2 className="text-[13px] font-mono uppercase tracking-[0.08em] text-[#a1a1aa]">
-            Recent Scans
-          </h2>
-          {recent.length > 0 && (
-            <Link href="/dashboard/scans" className="text-[11px] font-mono text-[#555555] hover:text-[#a1a1aa] transition-colors">
-              View all →
-            </Link>
-          )}
-        </div>
-
-        {recent.length === 0 ? (
-          <div className="flex items-center justify-center py-12 text-center">
-            <p className="text-[13px] text-[#444444]">No scans yet — start one from the Scans page.</p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-white/[0.05]">
-            {recent.map((scan) => {
-              const statusColor: Record<string, string> = {
-                completed: "bg-[#4ade80]", running: "bg-[#60a5fa]",
-                failed: "bg-[#f87171]", queued: "bg-[#a1a1aa]", pending: "bg-[#666666]",
-              }
-              const dot = statusColor[scan.status] ?? "bg-[#666666]"
-              const diff = Date.now() - new Date(scan.createdAt).getTime()
-              const mins = Math.round(diff / 60000)
-              const age = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`
-              return (
-                <li key={scan.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.02] transition-colors">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-mono text-white truncate" style={{ letterSpacing: "-0.14px" }}>
-                      {scan.repoFullName}
-                    </p>
-                    <p className="text-[11px] text-[#555555] mt-0.5">
-                      {scan.tools.slice(0, 3).join(" · ")}{scan.tools.length > 3 ? ` · +${scan.tools.length - 3}` : ""}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[13px] text-white tabular-nums">{scan.vulnerabilitiesCount}</p>
-                    <p className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#444444]">findings</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 w-[80px] justify-end">
-                    <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-                    <span className="text-[12px] text-[#a1a1aa] capitalize">{scan.status}</span>
-                  </div>
-                  <span className="text-[11px] font-mono text-[#444444] w-[60px] text-right">{age}</span>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
     </div>
   )
 }

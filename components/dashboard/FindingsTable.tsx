@@ -54,12 +54,19 @@ export function FindingsTable({ findings }: { findings: FindingRow[] }) {
 
                 <div className="min-w-0">
                   {v.filePath ? (
-                    <div>
-                      <p className="text-[11px] font-mono text-[#555555] truncate">{v.filePath.split("/").pop()}</p>
-                      {v.lines.length > 0 && (
-                        <p className="text-[10px] font-mono text-[#444444] truncate">{v.lines.slice(0, 3).join(", ")}</p>
-                      )}
-                    </div>
+                    (() => {
+                      const segs = v.filePath.split("/")
+                      const filename = segs[segs.length - 1] ?? ""
+                      const lineNum = v.lines[0] ?? null
+                      const deep = segs.length > 3
+                      const display = `${deep ? "…/" : ""}${filename}${lineNum ? `:${lineNum}` : ""}`
+                      const fullPath = `${v.filePath}${lineNum ? `:${lineNum}` : ""}`
+                      return (
+                        <div title={fullPath}>
+                          <p className="text-[11px] font-mono text-[#555555] truncate">{display}</p>
+                        </div>
+                      )
+                    })()
                   ) : v.targetUrl ? (
                     <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
                   ) : (

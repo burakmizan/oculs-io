@@ -20,6 +20,12 @@ interface Props {
     name: string
     repoFullName: string
     targetUrl: string | null
+    latestScan?: {
+      status: string
+      vulnerabilitiesCount: number
+      summary: Record<string, number> | null
+      completedAt: Date | null
+    } | null
   }
 }
 
@@ -134,6 +140,41 @@ export function ScanModal({ project }: Props) {
               <span className="text-[11px] font-mono text-[#444444] truncate">{project.targetUrl}</span>
             </div>
           )}
+          <div className="mt-2.5">
+            {!project.latestScan ? (
+              <p className="text-[11px] font-mono text-[#333333]">No scans yet</p>
+            ) : project.latestScan.status === "running" || project.latestScan.status === "queued" ? (
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#60a5fa] animate-pulse" />
+                <span className="text-[11px] font-mono text-[#60a5fa]">Scanning…</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                {project.latestScan.completedAt && (
+                  <span className="text-[11px] font-mono text-[#444444]">
+                    {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(project.latestScan.completedAt))}
+                  </span>
+                )}
+                <span className="text-[11px] font-mono text-[#555555]">
+                  {project.latestScan.vulnerabilitiesCount} findings
+                </span>
+                {(() => {
+                  const SEV_PRIORITY = ["critical", "high", "medium", "low", "info"]
+                  const SEV_COLORS: Record<string, string> = {
+                    critical: "text-[#f87171]", high: "text-[#fb923c]",
+                    medium: "text-[#fbbf24]", low: "text-[#60a5fa]", info: "text-[#a1a1aa]",
+                  }
+                  const topSev = SEV_PRIORITY.find(s => (project.latestScan?.summary?.[s] ?? 0) > 0) ?? null
+                  if (!topSev) return null
+                  return (
+                    <span className={`text-[10px] font-mono uppercase tracking-[0.04em] ${SEV_COLORS[topSev]}`}>
+                      {topSev}
+                    </span>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
         </div>
         <div className="px-4 pb-4">
           <button type="button" onClick={() => setOpen(true)}

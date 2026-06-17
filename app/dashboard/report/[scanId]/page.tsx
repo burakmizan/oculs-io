@@ -232,70 +232,87 @@ export default async function ReportPage({ params, searchParams }: Props) {
           </div>
         ) : (
           <ul className="divide-y divide-white/[0.04]">
-            {deduped
-              .sort((a, b) => {
-                const o = ["critical","high","medium","low","info"]
-                return o.indexOf(a.severity) - o.indexOf(b.severity)
-              })
-              .map(v => (
-                <li key={v.id}
-                  className="px-5 py-3.5 grid grid-cols-[1fr_90px_90px_140px_60px] gap-4
-                             hover:bg-white/[0.02] transition-colors items-center">
+            {(() => {
+              const SEV_HEX: Record<string, string> = {
+                critical: "#f87171", high: "#fb923c", medium: "#fbbf24",
+                low: "#60a5fa", info: "#a1a1aa",
+              }
+              const sorted = [...deduped].sort((a, b) =>
+                SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity)
+              )
+              const groups = SEV_ORDER
+                .map(sev => ({ sev, items: sorted.filter(v => v.severity === sev) }))
+                .filter(g => g.items.length > 0)
+              return groups.flatMap(({ sev, items }) => [
+                <li key={`header-${sev}`}
+                  style={{ borderLeft: `3px solid ${SEV_HEX[sev]}` }}
+                  className="px-4 flex items-center bg-white/[0.015]">
+                  <span className="text-[10px] font-mono uppercase tracking-[0.08em] leading-[28px]"
+                    style={{ color: SEV_HEX[sev] }}>
+                    {sev} — {items.length} {items.length === 1 ? "finding" : "findings"}
+                  </span>
+                </li>,
+                ...items.map(v => (
+                  <li key={v.id}
+                    className="px-5 py-3.5 grid grid-cols-[1fr_90px_90px_140px_60px] gap-4
+                               hover:bg-white/[0.02] transition-colors items-center">
 
-                  {/* Title */}
-                  <div className="min-w-0">
-                    <p className="text-[13px] text-white truncate flex items-center gap-1.5" style={{ letterSpacing: "-0.26px" }}>
-                      {(v as any).count === 0 && <span className="text-[#4ade80]">✓</span>}
-                      <span className={(v as any).count === 0 ? "text-[#a1a1aa]" : ""}>{v.title}</span>
-                    </p>
-                    {v.cweId && (
-                      <p className="text-[10px] font-mono text-[#333333] mt-0.5">{v.cweId}</p>
-                    )}
-                    {v.remediation && (
-                      <p className="text-[11px] text-[#444444] mt-0.5 line-clamp-1">{v.remediation}</p>
-                    )}
-                  </div>
+                    {/* Title */}
+                    <div className="min-w-0">
+                      <p className="text-[13px] text-white truncate flex items-center gap-1.5" style={{ letterSpacing: "-0.26px" }}>
+                        {(v as any).count === 0 && <span className="text-[#4ade80]">✓</span>}
+                        <span className={(v as any).count === 0 ? "text-[#a1a1aa]" : ""}>{v.title}</span>
+                      </p>
+                      {v.cweId && (
+                        <p className="text-[10px] font-mono text-[#333333] mt-0.5">{v.cweId}</p>
+                      )}
+                      {v.remediation && (
+                        <p className="text-[11px] text-[#444444] mt-0.5 line-clamp-1">{v.remediation}</p>
+                      )}
+                    </div>
 
-                  <div><SeverityBadge severity={v.severity} /></div>
-                  <span className="text-[11px] font-mono text-[#555555] truncate">{v.tool}</span>
+                    <div><SeverityBadge severity={v.severity} /></div>
+                    <span className="text-[11px] font-mono text-[#555555] truncate">{v.tool}</span>
 
-                  {/* Location */}
-                  <div className="min-w-0">
-                    {v.filePath ? (
-                      <div>
-                        <p className="text-[11px] font-mono text-[#555555] truncate">
-                          {v.filePath.split("/").pop()}
-                        </p>
-                        {(v as VulnerabilityRow & { count: number; lines: number[] }).lines?.length > 0 && (
-                          <p className="text-[10px] font-mono text-[#444444] truncate">
-                            lines: {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.slice(0, 3).join(", ")}
-                            {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.length > 3 && "…"}
+                    {/* Location */}
+                    <div className="min-w-0">
+                      {v.filePath ? (
+                        <div>
+                          <p className="text-[11px] font-mono text-[#555555] truncate">
+                            {v.filePath.split("/").pop()}
                           </p>
-                        )}
-                      </div>
-                    ) : v.targetUrl ? (
-                      <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
-                    ) : (
-                      <span className="text-[#333333]">—</span>
-                    )}
-                  </div>
+                          {(v as VulnerabilityRow & { count: number; lines: number[] }).lines?.length > 0 && (
+                            <p className="text-[10px] font-mono text-[#444444] truncate">
+                              lines: {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.slice(0, 3).join(", ")}
+                              {(v as VulnerabilityRow & { count: number; lines: number[] }).lines.length > 3 && "…"}
+                            </p>
+                          )}
+                        </div>
+                      ) : v.targetUrl ? (
+                        <p className="text-[11px] font-mono text-[#555555] truncate">{v.targetUrl}</p>
+                      ) : (
+                        <span className="text-[#333333]">—</span>
+                      )}
+                    </div>
 
-                  {/* Duplicate count */}
-                  <div className="text-center">
-                    {(v as VulnerabilityRow & { count: number }).count > 1 ? (
-                      <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
-                                       rounded-full bg-white/[0.06] border border-white/10
-                                       text-[11px] font-mono text-[#a1a1aa]">
-                        {(v as VulnerabilityRow & { count: number }).count}×
-                      </span>
-                    ) : (v as VulnerabilityRow & { count: number }).count === 0 ? (
-                      <span className="text-[#4ade80] font-mono text-[11px] font-semibold">0</span>
-                    ) : (
-                      <span className="text-[#333333]">—</span>
-                    )}
-                  </div>
-                </li>
-              ))}
+                    {/* Duplicate count */}
+                    <div className="text-center">
+                      {(v as VulnerabilityRow & { count: number }).count > 1 ? (
+                        <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
+                                         rounded-full bg-white/[0.06] border border-white/10
+                                         text-[11px] font-mono text-[#a1a1aa]">
+                          {(v as VulnerabilityRow & { count: number }).count}×
+                        </span>
+                      ) : (v as VulnerabilityRow & { count: number }).count === 0 ? (
+                        <span className="text-[#4ade80] font-mono text-[11px] font-semibold">0</span>
+                      ) : (
+                        <span className="text-[#333333]">—</span>
+                      )}
+                    </div>
+                  </li>
+                )),
+              ])
+            })()}
           </ul>
         )}
           </div>

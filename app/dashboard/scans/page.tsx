@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
-import { getUserProjects } from "@/lib/db/queries"
+import { getUserProjectsWithStatus, type ProjectWithStatus } from "@/lib/db/queries"
 import { ScanModal } from "@/components/dashboard/ScanModal"
 
 export const metadata: Metadata = { title: "Scans" }
@@ -10,9 +10,9 @@ export default async function ScansPage() {
   const session = await auth()
   const userId = session!.user.id
 
-  let projects: { id: string; name: string; repoFullName: string; targetUrl: string | null }[] = []
+  let projects: ProjectWithStatus[] = []
   try {
-    projects = await getUserProjects(userId)
+    projects = await getUserProjectsWithStatus(userId)
   } catch { /* Aurora offline */ }
 
   if (projects.length === 0) {
@@ -23,17 +23,36 @@ export default async function ScansPage() {
             Select a project to start a security scan.
           </p>
         </div>
-        <div className="flex flex-col items-center justify-center py-28 text-center gap-4
+        <div className="flex flex-col items-center justify-center py-16 text-center gap-6
                         border border-white/10 rounded-[16px] bg-white/[0.01]">
-          <div className="w-12 h-12 rounded-full bg-white/[0.04] border border-white/10
-                          flex items-center justify-center text-[20px]">⬡</div>
-          <div>
-            <p className="text-[16px] font-semibold text-white mb-1" style={{ letterSpacing: "-0.48px" }}>
-              No projects yet
-            </p>
-            <p className="text-[13px] text-[#555555] max-w-[300px]">
-              Create a project first to connect a repository and run scans.
-            </p>
+          <div className="flex flex-col gap-4 w-full max-w-[360px] text-left px-6">
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full border border-white/20
+                               flex items-center justify-center text-[10px] font-mono text-[#666666]">1</span>
+              <div>
+                <Link href="/dashboard/projects/new"
+                  className="text-[13px] font-medium text-white hover:text-[#a1a1aa] transition-colors">
+                  Connect a repository →
+                </Link>
+                <p className="text-[11px] text-[#555555] mt-0.5">Link a GitHub repo to create your first project.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full border border-white/20
+                               flex items-center justify-center text-[10px] font-mono text-[#555555]">2</span>
+              <div>
+                <p className="text-[13px] font-medium text-[#666666]">Configure your scan</p>
+                <p className="text-[11px] text-[#555555] mt-0.5">Choose SAST and DAST tools to match your stack.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full border border-white/20
+                               flex items-center justify-center text-[10px] font-mono text-[#555555]">3</span>
+              <div>
+                <p className="text-[13px] font-medium text-[#666666]">Get your security report</p>
+                <p className="text-[11px] text-[#555555] mt-0.5">Results with severity, OWASP mapping, and AI fixes.</p>
+              </div>
+            </div>
           </div>
           <Link
             href="/dashboard/projects/new"
