@@ -293,3 +293,15 @@ export async function removeTeamMember(teamId: string, targetUserId: string) {
     return { error: "Failed to remove member" }
   }
 }
+
+export async function dismissOnboardingChecklist() {
+  const session = await auth()
+  if (!session?.user?.id) return
+  try {
+    await db
+      .update(users)
+      .set({ onboardingCompletedAt: new Date() })
+      .where(and(eq(users.id, session.user.id)))
+    revalidatePath("/dashboard")
+  } catch { /* non-fatal */ }
+}

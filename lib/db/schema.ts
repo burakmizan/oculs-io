@@ -265,8 +265,12 @@ export const scans = pgTable(
     tools: scanToolEnum("tools").array().notNull(),
     status: scanStatusEnum("status").notNull().default("pending"),
     trigger: scanTriggerEnum("trigger").notNull().default("manual"),
-    /** Cached severity rollup: { critical, high, medium, low, info, riskScore }. */
-    summary: jsonb("summary").$type<Record<string, number>>(),
+    /** Cached severity rollup + optional per-tool progress list. */
+    summary: jsonb("summary").$type<{
+      critical?: number; high?: number; medium?: number; low?: number; info?: number
+      riskScore?: number
+      toolProgress?: { tool: string; findingCount: number; completedAt: string }[]
+    }>(),
     vulnerabilitiesCount: integer("vulnerabilities_count")
       .notNull()
       .default(0),
@@ -429,6 +433,33 @@ export type NewScan = typeof scans.$inferInsert
 export type Vulnerability = typeof vulnerabilities.$inferSelect
 export type NewVulnerability = typeof vulnerabilities.$inferInsert
 
+
+/* ════════════════════════════════════════════════════════════════════
+ *  API Keys — CI/CD bearer tokens for headless scan triggering (feature 12)
+ * ════════════════════════════════════════════════════════════════════ */
+
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** SHA-256 hex of the raw "oculs_…" key — never stored in plain text. */
+    keyHash: text("key_hash").notNull().unique(),
+    /** Last 8 chars of the raw key for display (not secret). */
+    keySuffix: text("key_suffix").notNull(),
+    createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+    lastUsedAt: timestamp("last_used_at", { mode: "date" }),
+  },
+  (t) => ({
+    userIdx: index("api_keys_user_idx").on(t.userId),
+  }),
+)
+
+export type ApiKey = typeof apiKeys.$inferSelect
+export type NewApiKey = typeof apiKeys.$inferInsert
 
 export const teams = pgTable("teams", {
   id: uuid("id").defaultRandom().primaryKey(),

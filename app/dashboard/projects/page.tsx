@@ -4,7 +4,7 @@ import { auth } from "@/auth"
 import { getUserProjectsWithStatus, type ProjectWithStatus } from "@/lib/db/queries"
 import { Code, CheckCircle2, AlertCircle, Edit2, GitCommit, Trash2, Settings, Minus } from "lucide-react"
 import { deleteProject } from "./actions"
-import { BadgeSnippet } from "@/components/dashboard/BadgeSnippet"
+import { computeGrade } from "@/lib/grade"
 
 // Add name field to ProjectOption type usage
 
@@ -72,13 +72,24 @@ export default async function ProjectsPage() {
             // at-risk = failed or critical/high present, unknown = no finished scan yet.
             const latest = p.latestScan
             const shortSha = latest?.commitSha ? latest.commitSha.slice(0, 7) : null
-            const critHigh = (latest?.summary?.critical ?? 0) + (latest?.summary?.high ?? 0)
+            const sumNums = latest?.summary as Record<string, number> | null
+            const critHigh = (sumNums?.critical ?? 0) + (sumNums?.high ?? 0)
             const health: "healthy" | "at-risk" | "unknown" =
               !latest || (latest.status !== "completed" && latest.status !== "failed")
                 ? "unknown"
                 : latest.status === "failed" || critHigh > 0
                   ? "at-risk"
                   : "healthy"
+
+            // Compute letter grade from latest scan summary (feature 14)
+            const grade = sumNums
+              ? computeGrade(
+                  ["critical", "high", "medium", "low", "info"].map(s => ({
+                    severity: s,
+                    count: sumNums[s] ?? 0,
+                  })),
+                )
+              : null
 
             return (
               <div
@@ -128,17 +139,27 @@ export default async function ProjectsPage() {
 
                 {/* Status & Actions */}
                 <div className="flex items-center gap-4 flex-shrink-0">
-                  
-                  {/* Dynamic Status Icon */}
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-white/[0.02] border border-white/5 mr-2">
-                    {health === "healthy" ? (
-                      <CheckCircle2 size={16} className="text-[#4ade80]" />
-                    ) : health === "at-risk" ? (
-                      <AlertCircle size={16} className="text-[#f87171] animate-pulse" />
-                    ) : (
-                      <Minus size={16} className="text-[#555555]" />
-                    )}
-                  </div>
+
+                  {/* Health grade badge (feature 14) */}
+                  {grade ? (
+                    <div
+                      className="w-8 h-8 rounded-[6px] flex items-center justify-center flex-shrink-0 text-[13px] font-bold border"
+                      style={{ color: grade.color, borderColor: `${grade.color}40`, backgroundColor: `${grade.color}14` }}
+                      title={`Security grade: ${grade.letter} (score ${grade.score}/100)`}
+                    >
+                      {grade.letter === "A+" ? "A⁺" : grade.letter}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-white/[0.02] border border-white/5">
+                      {health === "healthy" ? (
+                        <CheckCircle2 size={16} className="text-[#4ade80]" />
+                      ) : health === "at-risk" ? (
+                        <AlertCircle size={16} className="text-[#f87171] animate-pulse" />
+                      ) : (
+                        <Minus size={16} className="text-[#555555]" />
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2">
                     <Link

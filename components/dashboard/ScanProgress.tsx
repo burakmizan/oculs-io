@@ -43,20 +43,23 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
     }
   }, [scanId, repoName, toolCount])
 
-  // Real scan status polled from Aurora — drives completion instead of a timer
+  // Real scan status + tool completions polled from Aurora
   const [scanStatus, setScanStatus] = useState<string | null>(null)
+  const [toolProgress, setToolProgress] = useState<{ tool: string; findingCount: number; completedAt: string }[]>([])
   useEffect(() => {
     if (scanStatus === "completed" || scanStatus === "failed") return
     let cancelled = false
     const poll = async () => {
       try {
         const res = await fetch(`/api/scan/${scanId}/status`)
-        if (!res.ok) return // 401 / 404 / 5xx — keep last known state, retry next tick
+        if (!res.ok) return
         const data = await res.json()
-        if (!cancelled && typeof data?.status === "string") setScanStatus(data.status)
-      } catch {
-        // Network error — ignore and retry on next tick
-      }
+        if (!cancelled) {
+          if (typeof data?.status === "string") setScanStatus(data.status)
+          const tp = data?.summary?.toolProgress
+          if (Array.isArray(tp)) setToolProgress(tp)
+        }
+      } catch { /* retry next tick */ }
     }
     poll()
     const t = setInterval(poll, 2500)
@@ -187,27 +190,52 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
             />
           </div>
 
-          <div className="flex flex-col gap-1.5 max-h-[200px] overflow-hidden">
-            {STAGES.slice(Math.max(0, effectiveStageIdx - 2), effectiveStageIdx + 3).map((s, i) => {
-              const absIdx = Math.max(0, effectiveStageIdx - 2) + i
-              const isDoneStage = absIdx < effectiveStageIdx
-              const isCurrentStage = absIdx === effectiveStageIdx
-              return (
-                <div key={s.label}
-                  className={`flex items-center gap-2.5 transition-opacity ${
-                    isCurrentStage ? "opacity-100" : isDoneStage ? "opacity-40" : "opacity-20"
-                  }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                    isDoneStage ? "bg-[#4ade80]" : isCurrentStage ? "bg-[#60a5fa] animate-pulse" : "bg-white/20"
-                  }`} />
-                  <span className={`text-[12px] font-mono ${isCurrentStage ? "text-white" : "text-[#555555]"}`}
-                    style={{ letterSpacing: "-0.14px" }}>
-                    {s.label}{isDoneStage && " ✓"}
+          {toolProgress.length > 0 ? (
+            <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
+              {toolProgress.map((tp, i) => (
+                <div key={`${tp.tool}-${i}`} className="flex items-center gap-2.5">
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#4ade80]" />
+                  <span className="text-[12px] font-mono text-[#555555]" style={{ letterSpacing: "-0.14px" }}>
+                    <span className="text-white">{tp.tool}</span>
+                    {" ✓ — "}
+                    <span className={tp.findingCount > 0 ? "text-[#fbbf24]" : "text-[#555555]"}>
+                      {tp.findingCount} finding{tp.findingCount !== 1 ? "s" : ""}
+                    </span>
                   </span>
                 </div>
-              )
-            })}
-          </div>
+              ))}
+              {!isDone && !isFailed && (
+                <div className="flex items-center gap-2.5 mt-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#60a5fa] animate-pulse" />
+                  <span className="text-[12px] font-mono text-white" style={{ letterSpacing: "-0.14px" }}>
+                    Scanning…
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5 max-h-[200px] overflow-hidden">
+              {STAGES.slice(Math.max(0, effectiveStageIdx - 2), effectiveStageIdx + 3).map((s, i) => {
+                const absIdx = Math.max(0, effectiveStageIdx - 2) + i
+                const isDoneStage = absIdx < effectiveStageIdx
+                const isCurrentStage = absIdx === effectiveStageIdx
+                return (
+                  <div key={s.label}
+                    className={`flex items-center gap-2.5 transition-opacity ${
+                      isCurrentStage ? "opacity-100" : isDoneStage ? "opacity-40" : "opacity-20"
+                    }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      isDoneStage ? "bg-[#4ade80]" : isCurrentStage ? "bg-[#60a5fa] animate-pulse" : "bg-white/20"
+                    }`} />
+                    <span className={`text-[12px] font-mono ${isCurrentStage ? "text-white" : "text-[#555555]"}`}
+                      style={{ letterSpacing: "-0.14px" }}>
+                      {s.label}{isDoneStage && " ✓"}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Footer */}

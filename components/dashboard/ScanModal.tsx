@@ -23,14 +23,18 @@ interface Props {
     latestScan?: {
       status: string
       vulnerabilitiesCount: number
-      summary: Record<string, number> | null
+      summary: Record<string, unknown> | null
       completedAt: Date | null
     } | null
   }
+  /** Open the config modal immediately on mount (used by QuickScanDropdown). */
+  initialOpen?: boolean
+  /** Skip rendering the project card — only show the modal dialog. */
+  cardless?: boolean
 }
 
-export function ScanModal({ project }: Props) {
-  const [open, setOpen] = useState(false)
+export function ScanModal({ project, initialOpen = false, cardless = false }: Props) {
+  const [open, setOpen] = useState(initialOpen)
   const [state, action, pending] = useActionState(createScan, INIT)
 
   // SAST always on, DAST on if project has targetUrl
@@ -114,8 +118,8 @@ export function ScanModal({ project }: Props) {
         />
       )}
 
-      {/* Project card */}
-      <div className="flex flex-col bg-white/[0.02] border border-white/10 rounded-[14px] overflow-hidden
+      {/* Project card — hidden in cardless mode */}
+      {!cardless && <div className="flex flex-col bg-white/[0.02] border border-white/10 rounded-[14px] overflow-hidden
                       hover:border-white/15 transition-colors">
         <div className="px-4 pt-4 pb-3 flex-1">
           <div className="flex items-start gap-3 mb-3">
@@ -164,7 +168,7 @@ export function ScanModal({ project }: Props) {
                     critical: "text-[#f87171]", high: "text-[#fb923c]",
                     medium: "text-[#fbbf24]", low: "text-[#60a5fa]", info: "text-[#a1a1aa]",
                   }
-                  const topSev = SEV_PRIORITY.find(s => (project.latestScan?.summary?.[s] ?? 0) > 0) ?? null
+                  const topSev = SEV_PRIORITY.find(s => ((project.latestScan?.summary?.[s] as number) ?? 0) > 0) ?? null
                   if (!topSev) return null
                   return (
                     <span className={`text-[10px] font-mono uppercase tracking-[0.04em] ${SEV_COLORS[topSev]}`}>
@@ -184,7 +188,7 @@ export function ScanModal({ project }: Props) {
             Scan →
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Config modal */}
       {open && (

@@ -7,6 +7,7 @@ import {
   projects,
   scans,
   vulnerabilities,
+  apiKeys,
   type User,
   type Organization,
 } from "@/lib/db/schema"
@@ -358,7 +359,7 @@ export async function getRiskTrend(userId: string, limit = 20): Promise<RiskTren
         db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)),
       )
 
-  let rows: { createdAt: Date; summary: Record<string, number> | null; repoFullName: string }[] = []
+  let rows: { createdAt: Date; summary: { riskScore?: number; [k: string]: unknown } | null; repoFullName: string }[] = []
   try {
     rows = await db
       .select({ createdAt: scans.createdAt, summary: scans.summary, repoFullName: projects.repoFullName })
@@ -503,7 +504,7 @@ export interface ProjectWithStatus extends ProjectOption {
     status: string
     commitSha: string | null
     vulnerabilitiesCount: number
-    summary: Record<string, number> | null
+    summary: Record<string, unknown> | null
     completedAt: Date | null
   } | null
 }
@@ -693,7 +694,7 @@ export interface PublicReport {
   repoFullName: string
   createdAt: Date
   completedAt: Date | null
-  summary: Record<string, number> | null
+  summary: Record<string, unknown> | null
   vulns: VulnerabilityRow[]
 }
 
@@ -844,6 +845,197 @@ export async function getScanShareToken(scanId: string, userId: string): Promise
       .where(and(eq(scans.id, scanId), eq(scans.userId, userId)))
       .limit(1)
     return row?.shareToken ?? null
+  } catch {
+    return null
+  }
+}
+
+/* ── Public security score card (feature 6 & 14) ──────────────────── */
+
+export async function getProjectScoreData(
+  projectId: string,
+): Promise<{ breakdown: { severity: string; count: number }[]; lastScan: Date | null } | null> {
+  try {
+    const [proj] = await db
+      .select({ id: projects.id, badgePublic: projects.badgePublic })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1)
+    if (!proj || !proj.badgePublic) return null
+
+    const [breakdown, latestScans] = await Promise.all([
+      db
+        .select({ severity: vulnerabilities.severity, c: count() })
+        .from(vulnerabilities)
+        .where(and(eq(vulnerabilities.projectId, projectId), inArray(vulnerabilities.status, ["open", "in_review"])))
+        .groupBy(vulnerabilities.severity),
+      db
+        .select({ completedAt: scans.completedAt })
+        .from(scans)
+        .where(and(eq(scans.projectId, projectId), eq(scans.status, "completed")))
+        .orderBy(desc(scans.completedAt))
+        .limit(1),
+    ])
+
+    return {
+      breakdown: breakdown.map(r => ({ severity: r.severity, count: r.c })),
+      lastScan: latestScans[0]?.completedAt ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/* ── Onboarding checklist status (feature 15) ─────────────────────── */
+
+export interface OnboardingStatus {
+  hasProject: boolean
+  hasCompletedScan: boolean
+  hasAppliedFix: boolean
+  hasScheduledScan: boolean
+  allDone: boolean
+}
+
+export async function getOnboardingStatus(userId: string): Promise<OnboardingStatus> {
+  try {
+    const [projCount, scanCount, fixCount, schedCount] = await Promise.all([
+      db.select({ c: count() }).from(projects).where(eq(projects.userId, userId)),
+      db.select({ c: count() }).from(scans).where(and(eq(scans.userId, userId), eq(scans.status, "completed"))),
+      db.select({ c: count() }).from(vulnerabilities).where(and(eq(vulnerabilities.userId, userId), isNotNull(vulnerabilities.fixAppliedAt))),
+      db.select({ c: count() }).from(projects).where(and(eq(projects.userId, userId), eq(projects.scanScheduleEnabled, true))),
+    ])
+    const hasProject = (projCount[0]?.c ?? 0) > 0
+    const hasCompletedScan = (scanCount[0]?.c ?? 0) > 0
+    const hasAppliedFix = (fixCount[0]?.c ?? 0) > 0
+    const hasScheduledScan = (schedCount[0]?.c ?? 0) > 0
+    return {
+      hasProject,
+      hasCompletedScan,
+      hasAppliedFix,
+      hasScheduledScan,
+      allDone: hasProject && hasCompletedScan && hasAppliedFix && hasScheduledScan,
+    }
+  } catch {
+    return { hasProject: false, hasCompletedScan: false, hasAppliedFix: false, hasScheduledScan: false, allDone: false }
+  }
+}
+
+/* ── Vulnerability timeline (feature 10) ──────────────────────────── */
+
+export interface TimelineMonth {
+  month: string
+  opened: number
+  closed: number
+}
+
+export async function getVulnerabilityTimeline(
+  projectId: string,
+  userId: string,
+): Promise<TimelineMonth[]> {
+  try {
+    const rows = await db
+      .select({ createdAt: vulnerabilities.createdAt, fixAppliedAt: vulnerabilities.fixAppliedAt })
+      .from(vulnerabilities)
+      .where(and(eq(vulnerabilities.projectId, projectId), eq(vulnerabilities.userId, userId)))
+      .orderBy(vulnerabilities.createdAt)
+
+    const map = new Map<string, { opened: number; closed: number }>()
+    for (const r of rows) {
+      const openMonth = r.createdAt.toISOString().slice(0, 7)
+      if (!map.has(openMonth)) map.set(openMonth, { opened: 0, closed: 0 })
+      map.get(openMonth)!.opened++
+      if (r.fixAppliedAt) {
+        const closeMonth = r.fixAppliedAt.toISOString().slice(0, 7)
+        if (!map.has(closeMonth)) map.set(closeMonth, { opened: 0, closed: 0 })
+        map.get(closeMonth)!.closed++
+      }
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, v]) => ({ month, ...v }))
+  } catch {
+    return []
+  }
+}
+
+/* ── Scan comparison diff (feature 9) ─────────────────────────────── */
+
+export interface CompareVuln {
+  fingerprint: string | null
+  title: string
+  severity: string
+  filePath: string | null
+  lineStart: number | null
+  tool: string
+}
+
+export async function getScanVulnerabilitiesForCompare(
+  scanId: string,
+  userId: string,
+): Promise<CompareVuln[]> {
+  try {
+    return db
+      .select({
+        fingerprint: vulnerabilities.fingerprint,
+        title: vulnerabilities.title,
+        severity: vulnerabilities.severity,
+        filePath: vulnerabilities.filePath,
+        lineStart: vulnerabilities.lineStart,
+        tool: vulnerabilities.tool,
+      })
+      .from(vulnerabilities)
+      .where(
+        and(
+          eq(vulnerabilities.scanId, scanId),
+          eq(vulnerabilities.userId, userId),
+          notInArray(vulnerabilities.status, ["false_positive", "dismissed"]),
+        ),
+      )
+  } catch {
+    return []
+  }
+}
+
+/* ── API key management (feature 12) ──────────────────────────────── */
+
+export interface ApiKeyRow {
+  id: string
+  name: string
+  keySuffix: string
+  createdAt: Date
+  lastUsedAt: Date | null
+}
+
+export async function getUserApiKeys(userId: string): Promise<ApiKeyRow[]> {
+  try {
+    return db
+      .select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        keySuffix: apiKeys.keySuffix,
+        createdAt: apiKeys.createdAt,
+        lastUsedAt: apiKeys.lastUsedAt,
+      })
+      .from(apiKeys)
+      .where(eq(apiKeys.userId, userId))
+      .orderBy(desc(apiKeys.createdAt))
+  } catch {
+    return []
+  }
+}
+
+export async function resolveApiKeyUser(rawKey: string): Promise<string | null> {
+  try {
+    const { createHash } = await import("node:crypto")
+    const hash = createHash("sha256").update(rawKey).digest("hex")
+    const [row] = await db
+      .select({ userId: apiKeys.userId, id: apiKeys.id })
+      .from(apiKeys)
+      .where(eq(apiKeys.keyHash, hash))
+      .limit(1)
+    if (!row) return null
+    await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, row.id))
+    return row.userId
   } catch {
     return null
   }

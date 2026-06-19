@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { auth } from "@/auth"
 import { db } from "@/lib/db"
 import { TOOLS_BY_ID } from "@/lib/tools"
-import { projects, organizations, users } from "@/lib/db/schema"
+import { projects, organizations, users, scans } from "@/lib/db/schema"
 import { eq, count, and } from "drizzle-orm"
 import { cookies } from "next/headers"
 import type { ScanTool } from "@/types"
@@ -181,8 +181,31 @@ export async function deleteProject(projectId: string) {
     revalidatePath("/dashboard/projects")
     revalidatePath("/dashboard")
     return { ok: true }
-  } catch (e) {
+  } catch {
     return { error: "Could not delete project." }
+  }
+}
+
+export async function clearScanHistory(projectId: string): Promise<{ ok?: boolean; error?: string }> {
+  const session = await auth()
+  if (!session?.user?.id) return { error: "Session expired." }
+
+  const [project] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, session.user.id)))
+    .limit(1)
+
+  if (!project) return { error: "Project not found." }
+
+  try {
+    await db.delete(scans).where(and(eq(scans.projectId, projectId), eq(scans.userId, session.user.id)))
+    revalidatePath("/dashboard")
+    revalidatePath("/dashboard/projects")
+    revalidatePath(`/dashboard/projects/${projectId}/settings`)
+    return { ok: true }
+  } catch {
+    return { error: "Could not clear scan history." }
   }
 }
 

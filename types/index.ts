@@ -93,13 +93,23 @@ export interface WebhookFinding {
   references?: string[]
 }
 
+export interface ScanToolProgress {
+  tool: string
+  findingCount: number
+  completedAt: string
+}
+
 export interface WebhookPayload {
-  event: "scan.started" | "scan.completed" | "scan.failed"
+  event: "scan.started" | "scan.completed" | "scan.failed" | "tool.completed"
   scanId: string
   repository: string
   branch: string
   commitSha: string
   findings?: WebhookFinding[]
+  /** Tool name — present on per-tool completion events. */
+  tool?: string
+  /** True on the workflow-level final event that closes the scan. */
+  final?: boolean
 }
 
 /* ── Auth form action state ────────────────────────────────────────── */

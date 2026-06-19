@@ -1,19 +1,32 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/auth"
 import { db } from "@/lib/db"
-import { scans, projects } from "@/lib/db/schema"
+import { scans, projects, accounts } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
+import { resolveApiKeyUser } from "@/lib/db/queries"
 
 export const runtime = "nodejs"
 
 /**
  * POST /api/scan/trigger
- * Triggers the GitHub Actions workflow on the target repository
- * using workflow_dispatch after a scan has been queued in Aurora.
+ * Triggers the GitHub Actions workflow on the target repository.
+ * Accepts session auth OR Bearer API key (oculs_...) for CI/CD pipelines.
  */
 export async function POST(req: NextRequest) {
+  // Try session auth first, then API key auth
+  let userId: string | null = null
+
   const session = await auth()
-  if (!session?.user?.id) {
+  if (session?.user?.id) {
+    userId = session.user.id
+  } else {
+    const authHeader = req.headers.get("Authorization") ?? ""
+    if (authHeader.startsWith("Bearer oculs_")) {
+      userId = await resolveApiKeyUser(authHeader.slice(7))
+    }
+  }
+
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -38,7 +51,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Scan not found" }, { status: 404 })
   }
 
-  const token = session.user.githubAccessToken ?? process.env.GITHUB_TOKEN
+  // Resolve GitHub token: from session if available, otherwise from accounts table (API key auth)
+  let token: string | null = session?.user?.githubAccessToken ?? process.env.GITHUB_TOKEN ?? null
+  if (!token) {
+    try {
+      const [acct] = await db.select({ access_token: accounts.access_token }).from(accounts).where(eq(accounts.userId, userId)).limit(1)
+      token = acct?.access_token ?? null
+    } catch { /* non-fatal */ }
+  }
   if (!token) {
     return NextResponse.json({ error: "No GitHub token available" }, { status: 403 })
   }

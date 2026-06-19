@@ -6,6 +6,8 @@ import { teams, teamMembers, users } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
 import { updateProfile, disconnectGitHub, deleteAccount, updateTeamName, removeTeamMember, inviteMembers } from "@/app/dashboard/actions"
 import { redirect } from "next/navigation"
+import { getUserApiKeys } from "@/lib/db/queries"
+import { ApiKeysSection } from "@/components/dashboard/ApiKeysSection"
 
 export const metadata: Metadata = { title: "Settings" }
 
@@ -22,6 +24,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
   let teamData = null
   let membersData: { memberId: string; role: string; name: string | null; email: string }[] = []
+  const apiKeysList = await getUserApiKeys(session.user.id).catch(() => [])
 
   if (activeTeamId !== "personal") {
     const [t] = await db.select().from(teams).where(eq(teams.id, activeTeamId)).limit(1)
@@ -116,6 +119,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               )}
             </div>
           </div>
+
+          {/* API Keys Section (feature 12) */}
+          <ApiKeysSection initialKeys={apiKeysList} />
 
           {/* Danger Zone Section */}
           <div className="bg-red-500/5 border border-red-500/20 rounded-[12px]">

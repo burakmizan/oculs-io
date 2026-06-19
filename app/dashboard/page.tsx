@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { auth } from "@/auth"
+import { QuickScanDropdown } from "@/components/dashboard/QuickScanDropdown"
 import {
   getDashboardStats,
   getRecentScans,
@@ -9,17 +10,22 @@ import {
   getMttrStats,
   getRiskTrend,
   getUserPlan,
+  getOnboardingStatus,
+  hasCompletedOnboarding,
   type RecentScanRow,
   type ProjectOption,
   type OwaspCell,
   type MttrStats,
   type RiskTrendPoint,
+  type OnboardingStatus,
 } from "@/lib/db/queries"
 import type { DashboardStats } from "@/types"
 import { RiskGauge } from "@/components/dashboard/RiskGauge"
 import { RiskTrend } from "@/components/dashboard/RiskTrend"
 import { OwaspGrid } from "@/components/dashboard/OwaspGrid"
 import { MttrCard } from "@/components/dashboard/MttrCard"
+import { OnboardingChecklistWrapper } from "@/components/dashboard/OnboardingChecklistWrapper"
+import { dismissOnboardingChecklist } from "./actions"
 
 export const metadata: Metadata = { title: "Overview" }
 
@@ -81,17 +87,26 @@ export default async function DashboardPage() {
   let mttr = {} as MttrStats // Component hata vermesin diye boş state
   let riskTrend: RiskTrendPoint[] = []
   let userPlan = "starter"
+  let onboardingStatus: OnboardingStatus | null = null
 
   try {
-    ;[stats, recent, projects, owaspCells, mttr, riskTrend, userPlan] = await Promise.all([
-      getDashboardStats(userId),
-      getRecentScans(userId, 5),
-      getUserProjects(userId),
-      getOwaspCoverage(userId),
-      getMttrStats(userId),
-      getRiskTrend(userId, 20),
-      getUserPlan(userId),
+    const [dashData, onboarded] = await Promise.all([
+      Promise.all([
+        getDashboardStats(userId),
+        getRecentScans(userId, 5),
+        getUserProjects(userId),
+        getOwaspCoverage(userId),
+        getMttrStats(userId),
+        getRiskTrend(userId, 20),
+        getUserPlan(userId),
+      ]),
+      hasCompletedOnboarding(userId),
     ])
+    ;[stats, recent, projects, owaspCells, mttr, riskTrend, userPlan] = dashData
+    // Show checklist only for users who haven't completed onboarding
+    if (!onboarded) {
+      onboardingStatus = await getOnboardingStatus(userId)
+    }
   } catch { /* Aurora offline in local dev — show empty state */ }
 
   const planMeta = PLAN_META[userPlan] ?? PLAN_META.starter
@@ -112,14 +127,16 @@ export default async function DashboardPage() {
             {userPlan.charAt(0).toUpperCase() + userPlan.slice(1)} plan
           </span>
         </div>
-        <Link
-          href="/dashboard/scans"
-          className="flex items-center gap-2 h-9 px-4 rounded-[8px] bg-white text-[#000] text-[13px] font-medium hover:bg-white/90 transition-colors"
-          style={{ letterSpacing: "-0.26px" }}
-        >
-          + New Scan
-        </Link>
+        <QuickScanDropdown projects={projects} />
       </div>
+
+      {/* Onboarding checklist (feature 15) — shown until completed or dismissed */}
+      {onboardingStatus && !onboardingStatus.allDone && (
+        <OnboardingChecklistWrapper
+          status={onboardingStatus}
+          dismiss={dismissOnboardingChecklist}
+        />
+      )}
 
       {/* Risk gauge hero */}
       <RiskGauge

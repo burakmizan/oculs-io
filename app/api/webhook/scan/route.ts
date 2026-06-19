@@ -18,7 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { revalidatePath } from "next/cache"
-import { eq, count, and, inArray, ne } from "drizzle-orm"
+import { eq, count, and, inArray, ne, desc, sql } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
@@ -176,6 +176,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, event })
   }
 
+  // ── 5b. Handle tool.completed — lightweight per-tool progress signal ────────
+  if (event === "tool.completed") {
+    const toolName = payload.tool ?? findings[0]?.tool ?? "unknown"
+    try {
+      const [existing] = await db.select({ summary: scans.summary }).from(scans).where(eq(scans.id, scanId)).limit(1)
+      const existingTP = (existing?.summary as { toolProgress?: unknown[] } | null)?.toolProgress ?? []
+      const newEntry = { tool: toolName, findingCount: findings.length, completedAt: new Date().toISOString() }
+      await db
+        .update(scans)
+        .set({ summary: { ...(existing?.summary ?? {}), toolProgress: [...existingTP, newEntry] } as any })
+        .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
+      revalidatePath("/dashboard")
+    } catch (err) {
+      console.error("[webhook] tool.completed update failed (non-fatal):", err)
+    }
+    return NextResponse.json({ received: true, event, tool: toolName })
+  }
+
   // ── 6. Handle scan.completed ─────────────────────────────────────────────
   if (event !== "scan.completed") {
     return NextResponse.json({ error: `Unknown event: ${event}` }, { status: 400 })
@@ -185,7 +203,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // findings, often empty), and ONE final event from notify-complete carrying
   // {"final": true}. Only the final event may mark the scan "completed" — so the
   // dashboard can never finish before GitHub Actions finishes every job.
-  const isFinal = (payload as { final?: boolean }).final === true
+  const isFinal = payload.final === true
 
   // ── 6a. FINAL event → the whole workflow is done. Compute the summary from
   // everything per-tool events persisted, then finalise (once).
@@ -208,10 +226,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       )
 
       const [srow] = await db
-        .select({ projectId: scans.projectId, userId: scans.userId })
+        .select({ projectId: scans.projectId, userId: scans.userId, summary: scans.summary })
         .from(scans)
         .where(eq(scans.id, scanId))
         .limit(1)
+
+      // Preserve toolProgress accumulated during per-tool events
+      const toolProgress = (srow?.summary as { toolProgress?: unknown } | null | undefined)?.toolProgress ?? []
 
       await db
         .update(scans)
@@ -221,7 +242,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           commitSha,
           branch,
           vulnerabilitiesCount: totalCount,
-          summary: { ...summary, riskScore },
+          summary: { ...summary, riskScore, toolProgress } as any,
           error: null,
         })
         .where(eq(scans.id, scanId))
@@ -255,6 +276,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         }
       }
 
+      // PR auto-comment (once, alongside commit status)
+      if (srow && commitSha) {
+        try {
+          await postPRComment({ repository, commitSha, scanId, userId: srow.userId, summary })
+        } catch (err) {
+          console.error("[webhook] PR comment failed (non-fatal):", err)
+        }
+      }
+
       revalidatePath("/dashboard")
     } catch (err) {
       console.error("[webhook] Finalise failed (non-fatal):", err)
@@ -262,14 +292,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, event, finalized: true })
   }
 
-  // ── 6b. Per-tool event with NO findings → nothing to persist. Keep the scan
-  // "running" so it never finishes early, and return. (Don't downgrade a scan
-  // that is somehow already completed.)
+  // ── 6b. Per-tool event with NO findings → persist toolProgress, keep "running".
   if (findings.length === 0) {
     try {
+      const toolName = payload.tool ?? "unknown"
+      const [existing6b] = await db.select({ summary: scans.summary }).from(scans).where(eq(scans.id, scanId)).limit(1)
+      const existingTP = (existing6b?.summary as { toolProgress?: unknown[] } | null)?.toolProgress ?? []
+      const newEntry = { tool: toolName, findingCount: 0, completedAt: new Date().toISOString() }
       await db
         .update(scans)
-        .set({ status: "running", startedAt: new Date() })
+        .set({
+          status: "running",
+          startedAt: new Date(),
+          summary: { ...((existing6b?.summary ?? {}) as object), toolProgress: [...existingTP, newEntry] } as any,
+        })
         .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
     } catch (err) {
       console.error("[webhook] Per-tool empty event update failed (non-fatal):", err)
@@ -492,11 +528,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       base.owaspCategory = ai.owaspCategory || base.owaspCategory
       base.cvssScore = ai.cvssScore || base.cvssScore
       base.remediation = ai.remediation || base.remediation
-      // If AI identified this as a false positive, mark it as such in the DB
-      // so it shows in the "Muted" tab and doesn't inflate the risk score.
+      // AI-identified false positives: downgrade severity, record reason, and
+      // flag for insertion as false_positive status so they appear in Muted tab.
       if ((ai as { isFalsePositive?: boolean }).isFalsePositive === true) {
         base.triageSeverity = "info"
         base.triageReasoning = `AI-identified false positive: ${ai.triageReasoning}`
+        ;(base as Record<string, unknown>).__aiMuted = true
       }
     })
   } catch (err) {
@@ -523,10 +560,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (triaged.length > 0) {
     // Carry forward mutes: any fingerprint this user previously marked as
     // false_positive / dismissed stays suppressed on every future scan.
-    const mutedFingerprints = new Set<string>()
+    // Preserve the original status so UI labels (AI vs user) remain accurate.
+    const mutedFingerprints = new Map<string, "false_positive" | "dismissed">()
     try {
       const prior = await db
-        .selectDistinct({ fingerprint: vulnerabilities.fingerprint })
+        .select({ fingerprint: vulnerabilities.fingerprint, status: vulnerabilities.status })
         .from(vulnerabilities)
         .where(
           and(
@@ -534,7 +572,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             inArray(vulnerabilities.status, ["false_positive", "dismissed"]),
           ),
         )
-      for (const p of prior) if (p.fingerprint) mutedFingerprints.add(p.fingerprint)
+      for (const p of prior) {
+        if (p.fingerprint && !mutedFingerprints.has(p.fingerprint)) {
+          const s = p.status as string
+          if (s === "false_positive" || s === "dismissed") {
+            mutedFingerprints.set(p.fingerprint, s as "false_positive" | "dismissed")
+          }
+        }
+      }
     } catch (err) {
       console.error("[webhook] Mute lookup failed (non-fatal):", err)
     }
@@ -543,7 +588,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // Resolve tool category from the catalog; default to "sast" if unknown
       const toolSpec = TOOLS_BY_ID[f.tool]
       const category = toolSpec?.category ?? "sast"
-      const isMuted = mutedFingerprints.has(f.fingerprint)
+      const carriedStatus = mutedFingerprints.get(f.fingerprint)
+      const isAiMuted = (f as Record<string, unknown>).__aiMuted === true
+
+      const status: "false_positive" | "dismissed" | "open" =
+        carriedStatus ?? (isAiMuted ? "false_positive" : "open")
 
       return {
         scanId,
@@ -554,7 +603,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         ruleId: f.ruleId ?? null,
         title: f.title,
         description: f.description ?? null,
-        severity: f.triageSeverity,      // use AI-triaged severity
+        severity: f.triageSeverity,
         confidence: f.confidence ?? null,
         cweId: f.cweId || null,
         owaspCategory: f.owaspCategory || null,
@@ -569,7 +618,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         aiFixExplanation: null,
         aiFixModel: null,
         fixStatus: "none" as const,
-        status: isMuted ? ("false_positive" as const) : ("open" as const),
+        status,
         references: f.references ?? null,
         fingerprint: f.fingerprint,
         raw: f as unknown as Record<string, unknown>,
@@ -596,22 +645,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // ── 11. Per-tool accumulation only — update the running count, keep "running".
-  // The scan is finalised exclusively by the notify-complete "final" event (6a),
-  // so it can never complete before GitHub Actions finishes all jobs.
+  // ── 11. Per-tool accumulation — update count + toolProgress, keep "running".
+  // The scan is finalised exclusively by the notify-complete "final" event (6a).
   try {
-    const [countResult] = await db
-      .select({ count: count(vulnerabilities.id) })
-      .from(vulnerabilities)
-      .where(eq(vulnerabilities.scanId, scanId))
-    const totalCount = Number(countResult?.count ?? triaged.length)
+    const [[countResult], [scanRow2]] = await Promise.all([
+      db.select({ total: count(vulnerabilities.id) }).from(vulnerabilities).where(eq(vulnerabilities.scanId, scanId)),
+      db.select({ summary: scans.summary }).from(scans).where(eq(scans.id, scanId)).limit(1),
+    ])
+    const totalCount = Number(countResult?.total ?? triaged.length)
+    const toolName = payload.tool ?? findings[0]?.tool ?? "unknown"
+    const existingTP = (scanRow2?.summary as { toolProgress?: unknown[] } | null)?.toolProgress ?? []
+    const newEntry = { tool: toolName, findingCount: triaged.length, completedAt: new Date().toISOString() }
 
     await db
       .update(scans)
-      .set({ vulnerabilitiesCount: totalCount })
+      .set({
+        vulnerabilitiesCount: totalCount,
+        summary: { ...((scanRow2?.summary ?? {}) as object), toolProgress: [...existingTP, newEntry] } as any,
+      })
       .where(and(eq(scans.id, scanId), ne(scans.status, "completed")))
   } catch (err) {
-    console.error("[webhook] Per-tool count update failed (non-fatal):", err)
+    console.error("[webhook] Per-tool count/progress update failed (non-fatal):", err)
   }
 
   revalidatePath("/dashboard")
@@ -687,4 +741,119 @@ async function postCommitStatus(input: {
       }),
     },
   )
+}
+
+// ---------------------------------------------------------------------------
+// GitHub PR auto-comment — posts/updates a comment on the related PR (feature 7)
+// ---------------------------------------------------------------------------
+
+const PR_COMMENT_MARKER = "<!-- oculs-scan-result -->"
+const SEV_ORDER_PR: SeverityLevel[] = ["critical", "high", "medium", "low", "info"]
+
+async function postPRComment(input: {
+  repository: string
+  commitSha: string
+  scanId: string
+  userId: string
+  summary: Record<SeverityLevel, number>
+}): Promise<void> {
+  const [owner, repo] = input.repository.split("/")
+  if (!owner || !repo) return
+
+  let token: string | null = null
+  try {
+    const [acct] = await db
+      .select({ access_token: accounts.access_token })
+      .from(accounts)
+      .where(eq(accounts.userId, input.userId))
+      .limit(1)
+    token = acct?.access_token ?? process.env.GITHUB_TOKEN ?? null
+  } catch { return }
+  if (!token) return
+
+  const ghHeaders = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  }
+
+  // Find PRs that contain this commit
+  let pullNumbers: number[] = []
+  try {
+    const prRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/commits/${input.commitSha}/pulls`,
+      { headers: ghHeaders },
+    )
+    if (prRes.ok) {
+      const prs = await prRes.json() as { number: number }[]
+      pullNumbers = prs.map(p => p.number)
+    }
+  } catch { return }
+
+  if (pullNumbers.length === 0) return
+
+  // Fetch top findings for the comment table
+  const topFindings = await db
+    .select({
+      title: vulnerabilities.title,
+      severity: vulnerabilities.severity,
+      filePath: vulnerabilities.filePath,
+      lineStart: vulnerabilities.lineStart,
+    })
+    .from(vulnerabilities)
+    .where(and(eq(vulnerabilities.scanId, input.scanId), inArray(vulnerabilities.status, ["open", "in_review"])))
+    .orderBy(
+      sql`CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END`,
+      desc(vulnerabilities.title),
+    )
+    .limit(8)
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://oculs-io.vercel.app"
+  const breakdown = SEV_ORDER_PR.filter(s => (input.summary[s] ?? 0) > 0)
+    .map(s => `**${input.summary[s]} ${s}**`).join(", ")
+  const total = SEV_ORDER_PR.reduce((n, s) => n + (input.summary[s] ?? 0), 0)
+
+  let tableRows = ""
+  if (topFindings.length > 0) {
+    tableRows = "\n| Title | Severity | Location |\n|---|---|---|\n" +
+      topFindings.map(f => {
+        const loc = f.filePath ? `\`${f.filePath}${f.lineStart ? `:${f.lineStart}` : ""}\`` : "—"
+        return `| ${f.title} | ${f.severity} | ${loc} |`
+      }).join("\n")
+  }
+
+  const body =
+    `${PR_COMMENT_MARKER}\n` +
+    `## 🛡️ Oculs Security Scan\n\n` +
+    `**${total} finding${total === 1 ? "" : "s"}** · ${breakdown || "none"}\n` +
+    tableRows +
+    `\n\n[View full report →](${appUrl}/dashboard/report/${input.scanId})`
+
+  for (const prNumber of pullNumbers) {
+    try {
+      // Check for an existing Oculs comment on this PR
+      const listRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=50`,
+        { headers: ghHeaders },
+      )
+      let existingCommentId: number | null = null
+      if (listRes.ok) {
+        const comments = await listRes.json() as { id: number; body: string }[]
+        existingCommentId = comments.find(c => c.body.includes(PR_COMMENT_MARKER))?.id ?? null
+      }
+
+      if (existingCommentId) {
+        await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/issues/comments/${existingCommentId}`,
+          { method: "PATCH", headers: ghHeaders, body: JSON.stringify({ body }) },
+        )
+      } else {
+        await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+          { method: "POST", headers: ghHeaders, body: JSON.stringify({ body }) },
+        )
+      }
+    } catch { /* non-fatal per PR */ }
+  }
 }

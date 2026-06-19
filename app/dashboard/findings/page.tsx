@@ -4,6 +4,7 @@ import { auth } from "@/auth"
 import { getUserScans, getVulnerabilitiesByScan, getRetentionCutoff, type VulnerabilityRow, type ScanListRow } from "@/lib/db/queries"
 import { ScanSwitcher } from "@/components/dashboard/ScanSwitcher"
 import { FindingsTable } from "@/components/dashboard/FindingsTable"
+import { ExportButton } from "@/components/dashboard/ExportButton"
 
 export const metadata: Metadata = { title: "Findings" }
 
@@ -112,8 +113,9 @@ export default async function FindingsPage({ searchParams }: PageProps) {
         </div>
       ) : (
         <>
-          {/* Active / Muted tabs */}
-          <div className="flex items-center gap-1 mb-4 border border-white/10 rounded-[8px] p-0.5 w-fit bg-white/[0.02]">
+          {/* Toolbar: tabs + export + compare */}
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <div className="flex items-center gap-1 border border-white/10 rounded-[8px] p-0.5 w-fit bg-white/[0.02]">
             <Link
               href={`/dashboard/findings?scan=${selectedScan.id}&view=active`}
               className={`h-7 px-3 flex items-center rounded-[6px] text-[12px] font-mono transition-colors
@@ -128,6 +130,19 @@ export default async function FindingsPage({ searchParams }: PageProps) {
             >
               Muted
             </Link>
+          </div>
+
+          {/* Right side: export + compare */}
+          <div className="flex items-center gap-2">
+            <ExportButton findings={deduped.map(f => ({ ...f, createdAt: (f as any).createdAt }))} />
+            <Link
+              href={`/dashboard/compare?scan1=${selectedScan.id}`}
+              className="h-8 px-3 rounded-[6px] border border-white/10 text-[12px] font-mono text-[#888888]
+                         hover:text-white hover:bg-white/5 transition-colors"
+            >
+              Compare
+            </Link>
+          </div>
           </div>
 
           {/* Severity summary + report link */}
