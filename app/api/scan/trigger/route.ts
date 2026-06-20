@@ -3,7 +3,8 @@ import { auth } from "@/auth"
 import { db } from "@/lib/db"
 import { scans, projects, accounts } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
-import { resolveApiKeyUser } from "@/lib/db/queries"
+import { resolveApiKeyUser, saveScanTechStack } from "@/lib/db/queries"
+import { detectTechStack } from "@/lib/ai"
 
 export const runtime = "nodejs"
 
@@ -95,6 +96,15 @@ export async function POST(req: NextRequest) {
     console.error("[scan/trigger] GitHub dispatch failed:", err)
     // Non-fatal — scan is queued in Aurora, workflow can be triggered manually
     return NextResponse.json({ triggered: false, reason: err }, { status: 200 })
+  }
+
+  // Best-effort: cache the repo's framework/language profile on the scan row so
+  // AI triage in the webhook can reason about framework-specific exploitability.
+  try {
+    const techStack = await detectTechStack(scan.repoFullName, token)
+    await saveScanTechStack(scan.id, techStack)
+  } catch (err) {
+    console.error("[scan/trigger] tech stack detection failed (non-fatal):", err)
   }
 
   return NextResponse.json({ triggered: true, scanId, repo: scan.repoFullName })

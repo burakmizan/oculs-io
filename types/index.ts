@@ -33,6 +33,9 @@ export type SeverityLevel = "critical" | "high" | "medium" | "low" | "info"
 
 export type Confidence = "high" | "medium" | "low"
 
+/** AI-assessed likelihood a finding can actually be exploited in practice. */
+export type ExploitabilityLevel = "high" | "medium" | "low"
+
 export type ScanStatus = "pending" | "queued" | "running" | "completed" | "failed"
 
 export type ScanTrigger = "manual" | "webhook" | "schedule"
@@ -63,6 +66,25 @@ export interface ScanSummary {
   info: number
   /** 0–100 weighted risk score. */
   riskScore: number
+}
+
+/**
+ * Detected technology profile of a scanned repository, derived from its
+ * dependency manifest (package.json, requirements.txt, …) at scan-trigger
+ * time and cached on `scans.techStack`. Fed to every Gemini prompt so the AI
+ * can reason about framework-specific exploitability and remediation.
+ */
+export interface TechStack {
+  /** Primary language family, e.g. "TypeScript/Node.js", "Python", "Go". */
+  language: string | null
+  /** Detected web framework, e.g. "Next.js", "Django", "Rails". */
+  framework: string | null
+  /** A handful of notable dependencies for context. */
+  dependencies: string[]
+  /** Manifest file the profile was derived from. */
+  manifest: string | null
+  /** One-line human summary prepended to AI prompts. */
+  summary: string
 }
 
 /** Aggregate counters powering the dashboard stat cards. */

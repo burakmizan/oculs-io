@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { relations } from "drizzle-orm"
 import type { AdapterAccount } from "next-auth/adapters"
+import type { TechStack } from "@/types"
 
 /* ════════════════════════════════════════════════════════════════════
  *  Enumerations — encoded as native Postgres ENUM types for a deliberate,
@@ -94,6 +95,13 @@ export const fixStatusEnum = pgEnum("fix_status", [
   "suggested",
   "applied",
   "failed",
+])
+
+/** AI-assessed real-world exploitability (user-controlled input × auth × network reach). */
+export const exploitabilityEnum = pgEnum("exploitability", [
+  "high",
+  "medium",
+  "low",
 ])
 
 /* ════════════════════════════════════════════════════════════════════
@@ -274,6 +282,12 @@ export const scans = pgTable(
     vulnerabilitiesCount: integer("vulnerabilities_count")
       .notNull()
       .default(0),
+    /**
+     * Detected framework/language profile of the repo, captured at trigger
+     * time and fed to the AI triage prompts. Null when detection failed or
+     * no recognised manifest was present.
+     */
+    techStack: jsonb("tech_stack").$type<TechStack | null>(),
     error: text("error"),
     /** Random public token enabling a read-only shareable report at /r/[token]. Null = not shared. */
     shareToken: text("share_token"),
@@ -318,6 +332,8 @@ export const vulnerabilities = pgTable(
     description: text("description"),
     severity: severityEnum("severity").notNull().default("medium"),
     confidence: confidenceEnum("confidence"),
+    /** AI-assessed real-world exploitability — null for DAST/secrets findings. */
+    exploitability: exploitabilityEnum("exploitability"),
     cweId: text("cwe_id"),
     owaspCategory: text("owasp_category"),
     cvssScore: text("cvss_score"),
@@ -345,6 +361,14 @@ export const vulnerabilities = pgTable(
     references: text("references").array(),
     /** Stable hash for cross-scan dedup of the same finding. */
     fingerprint: text("fingerprint"),
+    /**
+     * Cross-tool correlation: findings sharing a group id form one AI-detected
+     * attack chain and are all elevated to the chain's highest severity.
+     * Null when the finding is not part of any chain.
+     */
+    correlationGroup: text("correlation_group"),
+    /** Human-readable name of the attack chain, e.g. "SSRF → metadata theft". */
+    correlationLabel: text("correlation_label"),
     /** Raw tool output, preserved verbatim for audit. */
     raw: jsonb("raw"),
 

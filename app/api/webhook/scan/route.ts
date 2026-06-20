@@ -23,8 +23,8 @@ import { db } from "@/lib/db"
 import { scans, vulnerabilities, accounts, projects } from "@/lib/db/schema"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import { sendScanAlert } from "@/lib/notify"
-import type { WebhookPayload, WebhookFinding, SeverityLevel } from "@/types"
-import { analyzeFindings } from "@/lib/ai"
+import type { WebhookPayload, WebhookFinding, SeverityLevel, ExploitabilityLevel, TechStack } from "@/types"
+import { analyzeFindings, correlateFindings } from "@/lib/ai"
 
 // ---------------------------------------------------------------------------
 // Runtime: Node.js (needs crypto + DB — NOT edge)
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       )
 
       const [srow] = await db
-        .select({ projectId: scans.projectId, userId: scans.userId, summary: scans.summary })
+        .select({ projectId: scans.projectId, userId: scans.userId, summary: scans.summary, techStack: scans.techStack })
         .from(scans)
         .where(eq(scans.id, scanId))
         .limit(1)
@@ -285,6 +285,91 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         }
       }
 
+      // ── Cross-tool correlation (best-effort, non-blocking) ─────────────────
+      // Now that every tool's findings are in the DB, ask Gemini in ONE request
+      // which of them combine into an attack chain. Members get a shared
+      // correlationGroup id and are elevated to the chain's highest severity.
+      // Any failure here leaves all findings exactly as they were.
+      try {
+        const openFindings = await db
+          .select({
+            id: vulnerabilities.id,
+            title: vulnerabilities.title,
+            severity: vulnerabilities.severity,
+            tool: vulnerabilities.tool,
+            filePath: vulnerabilities.filePath,
+            cweId: vulnerabilities.cweId,
+          })
+          .from(vulnerabilities)
+          .where(and(eq(vulnerabilities.scanId, scanId), inArray(vulnerabilities.status, ["open", "in_review"])))
+          .limit(60)
+
+        if (openFindings.length >= 2) {
+          const groups = await correlateFindings(
+            openFindings.map((o) => ({
+              id: o.id,
+              title: o.title,
+              severity: o.severity as SeverityLevel,
+              tool: o.tool as string,
+              filePath: o.filePath,
+              cweId: o.cweId,
+            })),
+            srow?.techStack ?? null,
+          )
+
+          const byId = new Map(openFindings.map((o) => [o.id, o.severity as SeverityLevel]))
+          const SEV_RANK: SeverityLevel[] = ["critical", "high", "medium", "low", "info"]
+          let applied = false
+
+          for (const g of groups) {
+            const members = g.memberIds.filter((id) => byId.has(id))
+            if (members.length < 2) continue
+            // Elevate the whole chain to its highest member severity (lowest rank index).
+            let maxSev: SeverityLevel = "info"
+            for (const id of members) {
+              const sev = byId.get(id)!
+              if (SEV_RANK.indexOf(sev) < SEV_RANK.indexOf(maxSev)) maxSev = sev
+            }
+            const groupId = crypto.randomUUID()
+            const label = (g.label || "Correlated attack chain").slice(0, 120)
+            await db
+              .update(vulnerabilities)
+              .set({ correlationGroup: groupId, correlationLabel: label, severity: maxSev })
+              .where(and(eq(vulnerabilities.scanId, scanId), inArray(vulnerabilities.id, members)))
+            applied = true
+          }
+
+          // Severity elevation changes the rollup — recompute the cached summary.
+          if (applied) {
+            const rows2 = await db
+              .select({ severity: vulnerabilities.severity })
+              .from(vulnerabilities)
+              .where(eq(vulnerabilities.scanId, scanId))
+            const sum2: Record<SeverityLevel, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+            for (const r of rows2) sum2[r.severity as SeverityLevel]++
+            const risk2 = Math.min(
+              100,
+              Object.entries(sum2).reduce(
+                (acc, [sev, cnt]) => acc + SEVERITY_WEIGHTS[sev as SeverityLevel] * cnt,
+                0,
+              ),
+            )
+            await db
+              .update(scans)
+              .set({
+                summary: {
+                  ...sum2,
+                  riskScore: risk2,
+                  toolProgress: toolProgress as { tool: string; findingCount: number; completedAt: string }[],
+                },
+              })
+              .where(eq(scans.id, scanId))
+          }
+        }
+      } catch (err) {
+        console.error("[webhook] Correlation step failed (non-fatal):", err)
+      }
+
       revalidatePath("/dashboard")
     } catch (err) {
       console.error("[webhook] Finalise failed (non-fatal):", err)
@@ -325,10 +410,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // ── 7. Resolve project & user from the scan row ──────────────────────────
-  let scanRow: { projectId: string; userId: string } | undefined
+  let scanRow: { projectId: string; userId: string; techStack: TechStack | null } | undefined
   try {
     const [row] = await db
-      .select({ projectId: scans.projectId, userId: scans.userId })
+      .select({ projectId: scans.projectId, userId: scans.userId, techStack: scans.techStack })
       .from(scans)
       .where(eq(scans.id, scanId))
       .limit(1)
@@ -343,7 +428,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Scan not found" }, { status: 404 })
   }
 
-  const { projectId, userId } = scanRow
+  const { projectId, userId, techStack } = scanRow
 
   // Fetch the customer's GitHub token so analyzeFindings can read actual file
   // content for accurate false positive detection. Non-fatal if unavailable.
@@ -372,6 +457,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const description = (f.description ?? "").toLowerCase()
     const ruleId = (f.ruleId ?? "").toLowerCase()
     const codeSnippet = (f.codeSnippet ?? "").toLowerCase()
+
+    // Tool family drives WHICH suppressions apply: a Dockerfile secret hit is
+    // noise, but a Dockerfile SAST bug may be real — so we scope by category.
+    const category = TOOLS_BY_ID[f.tool]?.category ?? "sast"
+    const isSecretTool = category === "secrets"            // gitleaks, detect_secrets
+    const isSastTool = category === "sast"                 // semgrep, bearer, bandit, gosec, codeql…
 
     // ── Gitleaks: template/example files with documented placeholder values ──
     // Any repo may have .env.example, .env.sample, .env.template with placeholder keys
@@ -467,6 +558,70 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
     }
 
+    // ── CI/CD config files: secret patterns here are wiring, not real leaks ───
+    // .github/ workflows, Jenkinsfile, Dockerfile, .gitlab-ci.yml reference
+    // ${{ secrets.* }} / $ENV placeholders that secret scanners misread as
+    // hardcoded credentials. Scoped to secret tools — a SAST bug in a Dockerfile
+    // is still a real finding and must NOT be suppressed.
+    const ciCdConfigPaths = [
+      /(^|\/)\.github\//i,
+      /(^|\/)jenkinsfile$/i,
+      /(^|\/)dockerfile(\.[\w.-]+)?$/i,
+      /(^|\/)\.gitlab-ci\.yml$/i,
+      /(^|\/)\.circleci\//i,
+      /(^|\/)azure-pipelines\.yml$/i,
+    ]
+    if (isSecretTool && ciCdConfigPaths.some(re => re.test(filePath))) return true
+
+    // ── Generated ORM / migration output: machine-written, not hand-authored ──
+    // Drizzle/Prisma migrations and generated clients are DDL + scaffolding that
+    // trips SAST and secret rules but is never developer-authored app logic.
+    const generatedOrmPaths = [
+      /(^|\/)migrations?\//i,          // drizzle/knex/typeorm/rails migration dirs
+      /(^|\/)prisma\/migrations\//i,
+      /(^|\/)\.drizzle\//i,
+      /(^|\/)drizzle\/meta\//i,
+      /(^|\/)generated\//i,            // prisma client + other codegen output
+      /schema\.prisma$/i,
+      /\d{4,}_[\w-]+\.sql$/i,          // timestamped migration SQL files (0008_x.sql)
+    ]
+    if ((isSastTool || isSecretTool) && generatedOrmPaths.some(re => re.test(filePath))) return true
+
+    // ── Documentation: fenced code blocks are EXAMPLES, not running code ──────
+    // docs/, *.md, *.mdx hold illustrative snippets. Suppress code-analysis hits
+    // only — a genuinely leaked credential in a README IS real, so secret-scanner
+    // findings are deliberately left for the AI/other rules to judge.
+    const docPaths = [
+      /(^|\/)docs?\//i,
+      /\.mdx?$/i,
+      /(^|\/)(readme|changelog|contributing)\.\w+$/i,
+    ]
+    if (isSastTool && docPaths.some(re => re.test(filePath))) return true
+
+    // ── Test fixtures: intentionally weak/insecure sample inputs ──────────────
+    // fixtures/, __fixtures__/, testdata/ hold deliberately vulnerable data used
+    // to exercise tests — flagging it as a production vuln is pure noise.
+    const fixturePaths = [
+      /(^|\/)fixtures?\//i,
+      /(^|\/)__fixtures__\//i,
+      /(^|\/)testdata\//i,
+      /(^|\/)__mocks__\//i,
+    ]
+    if (isSastTool && fixturePaths.some(re => re.test(filePath))) return true
+
+    // ── Gitleaks: process.env.* is an env-var READ, never a hardcoded secret ──
+    if (f.tool === "gitleaks" && /process\.env\./i.test(codeSnippet)) return true
+
+    // ── Semgrep: TODO/FIXME lines are prose comments, not an executable sink ───
+    // Injection rules occasionally match example/pseudo-code parked in a comment.
+    if (
+      f.tool === "semgrep" &&
+      (ruleId.includes("injection") || title.includes("injection")) &&
+      /\b(todo|fixme)\s*:/i.test(codeSnippet)
+    ) {
+      return true
+    }
+
     // ── Universal: lock files and generated files are never real findings ─────
     const neverScanPaths = [
       /package-lock\.json$/i,
@@ -501,6 +656,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     owaspCategory: f.owaspCategory ?? "",
     cvssScore: f.cvssScore ?? "",
     remediation: (f as any).remediation ?? "",
+    exploitability: null as ExploitabilityLevel | null,
     fingerprint: (() => {
       const raw = `${f.tool}::${f.ruleId ?? ""}::${f.filePath ?? f.targetUrl ?? ""}::${f.lineStart ?? 0}`
       let hash = 5381
@@ -516,7 +672,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // if the call throws, returns fewer results, or yields an invalid severity,
   // the affected findings simply keep their raw tool values above.
   try {
-    const aiResults = await analyzeFindings(filteredFindings, repository, githubToken ?? undefined)
+    const aiResults = await analyzeFindings(filteredFindings, repository, githubToken ?? undefined, techStack)
     aiResults.forEach((ai, idx) => {
       const base = triaged[idx]
       if (!base) return
@@ -528,6 +684,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       base.owaspCategory = ai.owaspCategory || base.owaspCategory
       base.cvssScore = ai.cvssScore || base.cvssScore
       base.remediation = ai.remediation || base.remediation
+      // AI exploitability score (already sanitised to high/medium/low or null).
+      if (ai.exploitability) base.exploitability = ai.exploitability
       // AI-identified false positives: downgrade severity, record reason, and
       // flag for insertion as false_positive status so they appear in Muted tab.
       if ((ai as { isFalsePositive?: boolean }).isFalsePositive === true) {
@@ -605,6 +763,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         description: f.description ?? null,
         severity: f.triageSeverity,
         confidence: f.confidence ?? null,
+        exploitability: f.exploitability ?? null,
         cweId: f.cweId || null,
         owaspCategory: f.owaspCategory || null,
         cvssScore: f.cvssScore || null,

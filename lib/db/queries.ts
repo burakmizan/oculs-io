@@ -11,7 +11,7 @@ import {
   type User,
   type Organization,
 } from "@/lib/db/schema"
-import type { DashboardStats, SeverityLevel, ScanTool } from "@/types"
+import type { DashboardStats, SeverityLevel, ScanTool, TechStack } from "@/types"
 
 
 /**
@@ -635,6 +635,23 @@ export async function queueScan(input: {
   return scan.id
 }
 
+/**
+ * Persists the detected framework/language profile onto a scan row. Best-effort
+ * — called at scan-trigger time and silently ignored on failure so it can never
+ * block a scan from running.
+ */
+export async function saveScanTechStack(
+  scanId: string,
+  techStack: TechStack | null,
+): Promise<void> {
+  if (!techStack) return
+  try {
+    await db.update(scans).set({ techStack }).where(eq(scans.id, scanId))
+  } catch (err) {
+    console.error("[queries] saveScanTechStack failed (non-fatal):", err)
+  }
+}
+
 export interface VulnerabilityRow {
   id: string
   title: string
@@ -654,6 +671,11 @@ export interface VulnerabilityRow {
   scanId: string
   description?: string | null
   codeSnippet?: string | null
+  /** AI exploitability score (high/medium/low) — present on newer scans. */
+  exploitability?: string | null
+  /** Cross-tool attack-chain id + label — present when the finding is correlated. */
+  correlationGroup?: string | null
+  correlationLabel?: string | null
 }
 
 export async function getVulnerabilities(
@@ -821,6 +843,9 @@ export async function getVulnerabilitiesByScan(
       scanId: vulnerabilities.scanId,
       description: vulnerabilities.description,
       codeSnippet: vulnerabilities.codeSnippet,
+      exploitability: vulnerabilities.exploitability,
+      correlationGroup: vulnerabilities.correlationGroup,
+      correlationLabel: vulnerabilities.correlationLabel,
     })
     .from(vulnerabilities)
     .innerJoin(projects, eq(vulnerabilities.projectId, projects.id))

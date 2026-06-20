@@ -34,6 +34,23 @@ function SeverityBadge({ severity }: { severity: string }) {
   )
 }
 
+const EXPLOIT_COLOR: Record<string, string> = {
+  high:   "text-[#f87171] border-[#f87171]/30",
+  medium: "text-[#fb923c] border-[#fb923c]/30",
+  low:    "text-[#a1a1aa] border-white/15",
+}
+
+/** AI-assessed real-world exploitability, shown under the severity badge. */
+function ExploitBadge({ level }: { level: string }) {
+  return (
+    <span className={`inline-flex items-center h-4 px-1.5 rounded-[3px] border
+                      text-[9px] font-mono uppercase tracking-[0.04em] whitespace-nowrap
+                      ${EXPLOIT_COLOR[level] ?? EXPLOIT_COLOR.low}`}>
+      Exploit: {level}
+    </span>
+  )
+}
+
 interface Props {
   params: Promise<{ scanId: string }>
   searchParams: Promise<{ step?: string }>
@@ -266,12 +283,20 @@ export default async function ReportPage({ params, searchParams }: Props) {
                       {v.cweId && (
                         <p className="text-[10px] font-mono text-[#333333] mt-0.5">{v.cweId}</p>
                       )}
+                      {v.correlationLabel && (
+                        <p className="text-[10px] font-mono text-[#a78bfa] mt-0.5 truncate">
+                          ⛓ chain: {v.correlationLabel}
+                        </p>
+                      )}
                       {v.remediation && (
                         <p className="text-[11px] text-[#444444] mt-0.5 line-clamp-1">{v.remediation}</p>
                       )}
                     </div>
 
-                    <div><SeverityBadge severity={v.severity} /></div>
+                    <div className="flex flex-col gap-1 items-start">
+                      <SeverityBadge severity={v.severity} />
+                      {v.exploitability && <ExploitBadge level={v.exploitability} />}
+                    </div>
                     <span className="text-[11px] font-mono text-[#555555] truncate">{v.tool}</span>
 
                     {/* Location */}

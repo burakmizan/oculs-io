@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache"
 import { auth } from "@/auth"
-import { queueScan } from "@/lib/db/queries"
+import { queueScan, saveScanTechStack } from "@/lib/db/queries"
+import { detectTechStack } from "@/lib/ai"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, teams, teamMembers, teamInvites, projects, users, accounts } from "@/lib/db/schema"
 import { cookies } from "next/headers"
@@ -145,6 +146,16 @@ export async function createScan(
     } catch (err) {
       // Non-fatal — scan is queued in Aurora, can retry manually
       console.error("[createScan] triggerGitHubWorkflow threw:", err)
+    }
+
+    // Detect the repo's framework/language profile from its dependency manifest
+    // and cache it on the scan row, so AI triage in the webhook can reason about
+    // framework-specific exploitability. Fully best-effort — never blocks a scan.
+    try {
+      const techStack = await detectTechStack(repoFullName, githubToken)
+      await saveScanTechStack(scanId, techStack)
+    } catch (err) {
+      console.error("[createScan] tech stack detection failed (non-fatal):", err)
     }
   } else {
     console.warn("[createScan] No GitHub token — workflow not dispatched. Set GITHUB_TOKEN in env.")

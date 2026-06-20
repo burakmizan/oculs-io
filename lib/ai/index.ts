@@ -4,7 +4,9 @@
  * Uses GEMINI_API_KEY and GEMINI_MODEL from environment variables.
  */
 
-import type { WebhookFinding, SeverityLevel } from "@/types"
+import type { WebhookFinding, SeverityLevel, ExploitabilityLevel, TechStack } from "@/types"
+
+export type { TechStack } from "@/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -31,10 +33,28 @@ export interface TriagedFinding extends WebhookFinding {
   cvssScore: string
   /** Plain-English remediation guidance. */
   remediation: string
+  /**
+   * AI-assessed real-world exploitability, derived from three reachability
+   * questions (user-controlled input? unauthenticated? network-reachable?).
+   * Null when the AI could not assess it (e.g. AI triage failed).
+   */
+  exploitability: ExploitabilityLevel | null
   /** True when AI determined this is a false positive (e.g. template file, placeholder value). */
   isFalsePositive?: boolean
   /** Stable dedup hash: tool + ruleId + filePath + lineStart. */
   fingerprint: string
+}
+
+/** A set of findings the AI judged to combine into a single attack chain. */
+export interface CorrelationGroup {
+  /** vulnerability ids (DB uuids) that form this chain — always ≥ 2. */
+  memberIds: string[]
+  /** Short human label, e.g. "SSRF → cloud metadata theft". */
+  label: string
+  /** Severity the whole chain should be elevated to. */
+  severity: SeverityLevel
+  /** 1-2 sentence explanation of why these combine. */
+  rationale: string
 }
 
 export interface AutoFixResult {
@@ -107,72 +127,366 @@ function makeFingerprint(f: WebhookFinding): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GitHub file fetcher — fetches actual source lines for AI context
+// GitHub source fetcher — pulls real code context for AI triage
+//
+// We give Gemini far more than a 60-line window: the *entire enclosing
+// function*, the other files that call/import it, and any nearby test file.
+// All of it is best-effort — every fetch is wrapped so a failure silently
+// degrades to the basic 60-line slice (or the tool's own snippet), preserving
+// the original behaviour.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Per-analyzeFindings caches so the same file/dir/search isn't fetched twice. */
+interface FetchCaches {
+  file: Map<string, string | null>
+  dir: Map<string, { name: string; path: string }[] | null>
+  search: Map<string, string | null>
+}
+
+/** A best-effort budget so a noisy scan can't fan out into hundreds of API calls. */
+interface FetchBudget {
+  search: number
+  dir: number
+}
+
+function makeCaches(): FetchCaches {
+  return { file: new Map(), dir: new Map(), search: new Map() }
+}
+
+const GH_API_VERSION = "2022-11-28"
+
 /**
- * Fetches a slice of a file from the customer's GitHub repository.
- * Used to give Gemini real code context so it can accurately judge
- * whether a finding is a true positive or a false positive.
- *
- * Returns at most 60 lines centered around the finding's line number.
- * Returns null if the file cannot be fetched (private repo without token,
- * network error, binary file, etc.) — callers must handle null gracefully.
+ * Fetches the full raw text of a file from the customer's GitHub repository.
+ * Cached per (repo, path). Returns null on any failure (private repo without
+ * token, binary file, network error, …) — callers must handle null.
  */
-async function fetchFileSlice(
-  repository: string,      // "owner/repo"
-  filePath: string,        // relative path e.g. "src/auth/login.ts"
-  lineStart: number | null,
-  githubToken: string | null,
+async function ghFetchRaw(
+  repository: string,
+  filePath: string,
+  token: string | null,
+  cache: Map<string, string | null>,
 ): Promise<string | null> {
   if (!filePath || !repository) return null
+  const key = `${repository}::${filePath}`
+  if (cache.has(key)) return cache.get(key) ?? null
 
+  let raw: string | null = null
   try {
     const headers: Record<string, string> = {
       Accept: "application/vnd.github.raw+json",
-      "X-GitHub-Api-Version": "2022-11-28",
+      "X-GitHub-Api-Version": GH_API_VERSION,
     }
-    if (githubToken) headers["Authorization"] = `Bearer ${githubToken}`
+    if (token) headers["Authorization"] = `Bearer ${token}`
 
-    // GitHub raw content API — returns the file as plain text
     const url = `https://api.github.com/repos/${repository}/contents/${encodeURIComponent(filePath)}`
     const res = await fetch(url, { headers })
-
-    if (!res.ok) return null
-
-    // GitHub returns base64-encoded content in JSON; use raw+json to get plain text
-    const contentType = res.headers.get("content-type") ?? ""
-    let raw: string
-
-    if (contentType.includes("application/json")) {
-      // Fallback: JSON response with base64
-      const json = await res.json() as { content?: string; encoding?: string }
-      if (!json.content || json.encoding !== "base64") return null
-      raw = Buffer.from(json.content.replace(/\n/g, ""), "base64").toString("utf-8")
-    } else {
-      // Raw text response
-      raw = await res.text()
+    if (res.ok) {
+      const contentType = res.headers.get("content-type") ?? ""
+      if (contentType.includes("application/json")) {
+        const json = (await res.json()) as { content?: string; encoding?: string }
+        if (json.content && json.encoding === "base64") {
+          raw = Buffer.from(json.content.replace(/\n/g, ""), "base64").toString("utf-8")
+        }
+      } else {
+        raw = await res.text()
+      }
     }
-
-    // Return a focused window of lines around the finding
-    const lines = raw.split("\n")
-    const total = lines.length
-
-    if (!lineStart || lineStart < 1) {
-      // No line hint — return first 40 lines for context
-      return lines.slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join("\n")
-    }
-
-    // 30 lines before, 30 lines after the flagged line
-    const from = Math.max(0, lineStart - 30)
-    const to = Math.min(total, lineStart + 30)
-    return lines
-      .slice(from, to)
-      .map((l, i) => `${from + i + 1}${from + i + 1 === lineStart ? " ◄" : "  "}: ${l}`)
-      .join("\n")
   } catch {
-    return null
+    raw = null
   }
+  cache.set(key, raw)
+  return raw
+}
+
+/** The original behaviour: a 60-line window centered on the finding. */
+function sliceAround(lines: string[], lineStart: number | null): string {
+  const total = lines.length
+  if (!lineStart || lineStart < 1) {
+    return lines.slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join("\n")
+  }
+  const from = Math.max(0, lineStart - 30)
+  const to = Math.min(total, lineStart + 30)
+  return lines
+    .slice(from, to)
+    .map((l, i) => `${from + i + 1}${from + i + 1 === lineStart ? " ◄" : "  "}: ${l}`)
+    .join("\n")
+}
+
+/** Heuristic: does this line (with the one above it) open a function/method? */
+function looksLikeFunction(line: string, prevLine: string): boolean {
+  const s = `${prevLine}\n${line}`
+  return (
+    /\bfunction\b/.test(s) ||                                              // function foo() / function()
+    /=>\s*\{?\s*$/.test(line) ||                                           // arrow fn body opening
+    /\bfunc\s+[\w(]/.test(s) ||                                            // Go
+    /\b(def|fn)\s+\w+/.test(s) ||                                          // misc
+    /\b(public|private|protected|internal|static|async|export|override|suspend)\b[^;]*\([^;]*\)\s*\{?\s*$/.test(s) || // typed methods
+    /^\s*[\w$]+\s*\([^;)]*\)\s*\{\s*$/.test(line) ||                       // bareMethod(args) {
+    /\b[\w$]+\s*=\s*(async\s*)?function\b/.test(s) ||                      // const x = function
+    /\b[\w$]+\s*[:=]\s*(async\s*)?\([^)]*\)\s*(:[^={]+)?=>/.test(s)        // const x = (..) =>
+  )
+}
+
+/** Pulls the function/method identifier out of a signature line. */
+function extractFunctionName(header: string): string | null {
+  let m: RegExpMatchArray | null
+  if ((m = header.match(/\bfunction\s+([\w$]+)/))) return m[1]
+  if ((m = header.match(/\b(?:func|def|fn)\s+([\w$]+)/))) return m[1]
+  if ((m = header.match(/\b([\w$]+)\s*[:=]\s*(?:async\s*)?(?:function|\()/))) return m[1]
+  if ((m = header.match(/\b(?:public|private|protected|static|async|override)\b[\w\s<>,[\]]*\s+([\w$]+)\s*\(/))) return m[1]
+  if ((m = header.match(/^\s*([\w$]+)\s*\([^)]*\)\s*\{/))) return m[1]
+  return null
+}
+
+/** Forward brace-match: returns the line index of the brace that closes openLn. */
+function matchCloseBrace(lines: string[], openLn: number): number | null {
+  let depth = 0
+  let started = false
+  for (let ln = openLn; ln < lines.length; ln++) {
+    for (const ch of lines[ln]) {
+      if (ch === "{") { depth++; started = true }
+      else if (ch === "}") { depth--; if (started && depth === 0) return ln }
+    }
+  }
+  return null
+}
+
+/** Extracts the enclosing function for brace languages via brace backtracking. */
+function extractBraceFunction(
+  lines: string[],
+  lineStart: number,
+): { body: string; name: string | null } | null {
+  const i0 = lineStart - 1
+  // Walk full lines up to the target, tracking the stack of unmatched "{".
+  const openStack: number[] = []
+  for (let ln = 0; ln <= i0 && ln < lines.length; ln++) {
+    for (const ch of lines[ln]) {
+      if (ch === "{") openStack.push(ln)
+      else if (ch === "}") openStack.pop()
+    }
+  }
+  // Innermost → outermost: the first enclosing block whose header is a function.
+  for (let s = openStack.length - 1; s >= 0; s--) {
+    const openLn = openStack[s]
+    const prev = openLn > 0 ? lines[openLn - 1] : ""
+    if (!looksLikeFunction(lines[openLn], prev)) continue
+    const end = matchCloseBrace(lines, openLn)
+    if (end === null) continue
+    // Pull the signature line up one row when it spilled onto the previous line.
+    let start = openLn
+    if (openLn > 0 && /\bfunction\b|\bfunc\b|\bdef\b|=>|\)\s*$|=\s*$/.test(prev) && !/[{};]\s*$/.test(prev)) {
+      start = openLn - 1
+    }
+    let body = lines.slice(start, end + 1)
+    let truncated = false
+    if (body.length > 160) { body = body.slice(0, 160); truncated = true }
+    const text = body
+      .map((l, idx) => {
+        const realLn = start + idx + 1
+        return `${realLn}${realLn === lineStart ? " ◄" : "  "}: ${l}`
+      })
+      .join("\n") + (truncated ? "\n… (function truncated)" : "")
+    return { body: text, name: extractFunctionName(`${prev} ${lines[openLn]}`) }
+  }
+  return null
+}
+
+/** Extracts the enclosing function for Python via indentation. */
+function extractPythonFunction(
+  lines: string[],
+  lineStart: number,
+): { body: string; name: string | null } | null {
+  const i0 = lineStart - 1
+  const targetIndent = (lines[i0].match(/^(\s*)/)?.[1] ?? "").length
+  let defLn = -1
+  let defIndent = 0
+  for (let ln = i0; ln >= 0; ln--) {
+    const m = lines[ln].match(/^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)/)
+    if (m) {
+      const indent = m[1].length
+      if (ln === i0 || targetIndent > indent) { defLn = ln; defIndent = indent; break }
+    }
+  }
+  if (defLn < 0) return null
+  let end = lines.length - 1
+  for (let ln = defLn + 1; ln < lines.length; ln++) {
+    if (lines[ln].trim() === "") continue
+    const ind = (lines[ln].match(/^(\s*)/)?.[1] ?? "").length
+    if (ind <= defIndent) { end = ln - 1; break }
+  }
+  let body = lines.slice(defLn, end + 1)
+  let truncated = false
+  if (body.length > 160) { body = body.slice(0, 160); truncated = true }
+  const text = body
+    .map((l, idx) => {
+      const realLn = defLn + idx + 1
+      return `${realLn}${realLn === lineStart ? " ◄" : "  "}: ${l}`
+    })
+    .join("\n") + (truncated ? "\n… (function truncated)" : "")
+  return { body: text, name: lines[defLn].match(/def\s+([A-Za-z_]\w*)/)?.[1] ?? null }
+}
+
+/** Extracts the function enclosing `lineStart`, dispatching by file extension. */
+function extractEnclosingFunction(
+  lines: string[],
+  lineStart: number | null,
+  filePath: string,
+): { body: string; name: string | null } | null {
+  if (!lineStart || lineStart < 1 || lineStart > lines.length) return null
+  if (lines.length > 5000) return null // too large to brace-walk cheaply
+  const ext = (filePath.split(".").pop() ?? "").toLowerCase()
+  if (ext === "py") return extractPythonFunction(lines, lineStart)
+  const braceLangs = new Set([
+    "js", "jsx", "ts", "tsx", "mjs", "cjs", "java", "go", "c", "cc", "cpp",
+    "cxx", "h", "hpp", "cs", "php", "rs", "kt", "kts", "scala", "swift", "m", "mm",
+  ])
+  if (braceLangs.has(ext)) return extractBraceFunction(lines, lineStart)
+  return null
+}
+
+/**
+ * Uses the GitHub code-search API to find OTHER files that call/import the
+ * given function — the "blast radius" of a finding. Returns a short bullet
+ * list of file paths, or null. Skipped for very short/generic names.
+ */
+async function findCallers(
+  repository: string,
+  name: string,
+  excludePath: string,
+  token: string | null,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  if (!token || !name || name.length < 4) return null
+  const key = `${repository}::${name}`
+  if (cache.has(key)) return cache.get(key) ?? null
+
+  let result: string | null = null
+  try {
+    const q = encodeURIComponent(`${name} repo:${repository}`)
+    const res = await fetch(`https://api.github.com/search/code?q=${q}&per_page=5`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": GH_API_VERSION,
+      },
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { items?: { path: string }[] }
+      const paths = (data.items ?? [])
+        .map((i) => i.path)
+        .filter((p) => p && p !== excludePath)
+      const uniq = Array.from(new Set(paths)).slice(0, 3)
+      if (uniq.length) result = uniq.map((p) => `- ${p}`).join("\n")
+    }
+  } catch {
+    result = null
+  }
+  cache.set(key, result)
+  return result
+}
+
+/** Matches conventional test/spec file names across ecosystems. */
+function isTestFileName(n: string): boolean {
+  const low = n.toLowerCase()
+  return (
+    /(^|[._-])(test|spec)([._-]|$)/i.test(low) ||
+    /\.(test|spec)\./i.test(low) ||
+    /^test_/i.test(low) ||
+    /_test\./i.test(low)
+  )
+}
+
+/**
+ * Looks in the finding's own directory for a test/spec file, preferring one
+ * whose name matches the source file. Returns the first ~40 lines, or null.
+ */
+async function findTestFile(
+  repository: string,
+  filePath: string,
+  token: string | null,
+  caches: FetchCaches,
+): Promise<string | null> {
+  const dir = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : ""
+  const baseName = (filePath.split("/").pop() ?? "").replace(/\.[^.]+$/, "").toLowerCase()
+  const dirKey = `${repository}::${dir}`
+
+  let listing = caches.dir.get(dirKey)
+  if (listing === undefined) {
+    listing = null
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": GH_API_VERSION,
+      }
+      if (token) headers["Authorization"] = `Bearer ${token}`
+      const res = await fetch(
+        `https://api.github.com/repos/${repository}/contents/${encodeURIComponent(dir)}`,
+        { headers },
+      )
+      if (res.ok) {
+        const arr = (await res.json()) as { name: string; path: string; type: string }[]
+        if (Array.isArray(arr)) {
+          listing = arr.filter((x) => x.type === "file").map((x) => ({ name: x.name, path: x.path }))
+        }
+      }
+    } catch {
+      listing = null
+    }
+    caches.dir.set(dirKey, listing)
+  }
+  if (!listing) return null
+
+  const match =
+    listing.find((f) => isTestFileName(f.name) && f.name.toLowerCase().includes(baseName)) ??
+    listing.find((f) => isTestFileName(f.name))
+  if (!match) return null
+
+  const content = await ghFetchRaw(repository, match.path, token, caches.file)
+  if (!content) return null
+  return `[${match.path}]\n${content.split("\n").slice(0, 40).join("\n")}`
+}
+
+/**
+ * Assembles the rich, labelled code context for one finding:
+ *   === FUNCTION BODY ===   (enclosing function, or 60-line slice fallback)
+ *   === CALLERS ===         (other files calling/importing the function)
+ *   === TEST COVERAGE ===   (nearby test file)
+ * Returns null only when the file itself can't be fetched.
+ */
+async function fetchRichContext(
+  repository: string,
+  filePath: string,
+  lineStart: number | null,
+  token: string | null,
+  caches: FetchCaches,
+  budget: FetchBudget,
+): Promise<string | null> {
+  const raw = await ghFetchRaw(repository, filePath, token, caches.file)
+  if (!raw) return null
+
+  const lines = raw.split("\n")
+  const fn = extractEnclosingFunction(lines, lineStart, filePath)
+  const functionBody = fn ? fn.body : sliceAround(lines, lineStart)
+
+  let out = `[FETCHED FROM REPO — ${filePath}]\n=== FUNCTION BODY ===\n${functionBody}`
+
+  // Callers — only when we resolved a real function name and have search budget.
+  if (fn?.name && budget.search > 0) {
+    budget.search--
+    const callers = await findCallers(repository, fn.name, filePath, token, caches.search)
+    if (callers) {
+      out += `\n\n=== CALLERS (other files importing/calling \`${fn.name}\`) ===\n${callers}`
+    }
+  }
+
+  // Test coverage — bounded by directory-listing budget.
+  if (budget.dir > 0) {
+    budget.dir--
+    const test = await findTestFile(repository, filePath, token, caches)
+    if (test) out += `\n\n=== TEST COVERAGE ===\n${test}`
+  }
+
+  return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -190,36 +504,46 @@ export async function analyzeFindings(
   findings: WebhookFinding[],
   repository?: string,
   githubToken?: string,
+  techStack?: TechStack | null,
 ): Promise<TriagedFinding[]> {
   if (findings.length === 0) return []
 
   const BATCH_SIZE = 20
   const results: TriagedFinding[] = []
 
+  // Shared across the whole call so the same file/dir/search is fetched once,
+  // and so a noisy scan can't fan out into hundreds of GitHub API calls.
+  const caches = makeCaches()
+  const budget: FetchBudget = { search: 15, dir: 15 }
+
+  // Framework/language line prepended to every prompt (point 4).
+  const techLine = techStack?.summary ? `This codebase uses: ${techStack.summary}\n\n` : ""
+
   for (let i = 0; i < findings.length; i += BATCH_SIZE) {
     const batch = findings.slice(i, i + BATCH_SIZE)
 
-    // Fetch real file content for each finding in this batch so Gemini can
-    // see the actual code, not just the tool's snippet. This dramatically
-    // improves false positive detection accuracy for SAST findings.
+    // Fetch rich code context for each finding: the full enclosing function,
+    // the other files that call/import it, and any nearby test file. This
+    // dramatically improves false-positive detection accuracy for SAST.
     const batchWithContext = await Promise.all(
       batch.map(async (f) => {
         // Skip fetch if: no file path, already has a long code snippet, or DAST finding
         if (!f.filePath || (f.codeSnippet && f.codeSnippet.length > 200) || f.targetUrl) {
           return { ...f, _fetchedContext: null as string | null }
         }
-        const slice = await fetchFileSlice(
+        const context = await fetchRichContext(
           repository ?? "",
           f.filePath,
           f.lineStart ?? null,
           githubToken ?? null,
+          caches,
+          budget,
         )
-        return { ...f, _fetchedContext: slice }
+        return { ...f, _fetchedContext: context }
       })
     )
 
-    const prompt = `
-You are a senior application security engineer triaging security scan findings from an automated scanner.
+    const prompt = `${techLine}You are a senior application security engineer triaging security scan findings from an automated scanner.
 These findings come from ARBITRARY customer repositories — not a specific known codebase.
 
 For EACH finding, return a JSON object with these exact fields:
@@ -229,6 +553,11 @@ For EACH finding, return a JSON object with these exact fields:
 - owaspCategory: OWASP Top 10 2021 category like "A03:2021 – Injection" (empty string if not applicable)
 - cvssScore: estimated CVSS 3.1 base score as string like "8.1" (empty string if unknown)
 - remediation: specific actionable remediation steps in 2-4 sentences. CRITICAL: do NOT invent or guess specific version numbers, CVE IDs, or commit hashes. If you are not certain of the exact fixed version, write "upgrade to the latest patched version and consult the official advisory" instead of naming a version. NEVER recommend downgrading a package, and never suggest a version older than what is already installed.
+- exploitability: one of "high" | "medium" | "low". Decide it by answering THREE questions about THIS finding:
+    (1) Is the vulnerable input USER-CONTROLLED — does data from an external/untrusted source reach the sink?
+    (2) Is it reachable WITHOUT prior authentication — can an unauthenticated actor trigger it?
+    (3) Is the affected code NETWORK-REACHABLE at runtime (vs. local-only, build-time, or test/dev tooling)?
+  Score "high" when all/most answers are yes (user-controlled AND unauthenticated AND network-reachable); "medium" when mixed (e.g. requires authentication, or only partially reachable); "low" when the input is not user-controlled, requires privileged/local access, or is not network-reachable. Use the FUNCTION BODY, CALLERS and TEST COVERAGE context to judge reachability.
 - isFalsePositive: true if this is a false positive, false otherwise
 
 FALSE POSITIVE DETECTION — set triageSeverity to "info" and isFalsePositive to true when ANY of these apply:
@@ -254,10 +583,8 @@ INPUT FINDINGS (with real file context where available):
 ${JSON.stringify(
   batchWithContext.map(({ _fetchedContext, ...f }) => ({
     ...f,
-    // Replace short tool snippet with full fetched context when available
-    codeSnippet: _fetchedContext
-      ? `[FETCHED FROM REPO — ${f.filePath}]\n${_fetchedContext}`
-      : (f.codeSnippet ?? null),
+    // Replace the short tool snippet with the full labelled context when available.
+    codeSnippet: _fetchedContext ?? (f.codeSnippet ?? null),
   })),
   null,
   2,
@@ -271,6 +598,7 @@ ${JSON.stringify(
       owaspCategory: string
       cvssScore: string
       remediation: string
+      exploitability?: ExploitabilityLevel
       isFalsePositive?: boolean
     }>
 
@@ -287,6 +615,7 @@ ${JSON.stringify(
         owaspCategory: f.owaspCategory ?? "",
         cvssScore: f.cvssScore ?? "",
         remediation: "Refer to tool documentation for remediation guidance.",
+        exploitability: undefined,
         isFalsePositive: false,
       }))
     }
@@ -299,8 +628,16 @@ ${JSON.stringify(
         owaspCategory: "",
         cvssScore: "",
         remediation: "",
+        exploitability: undefined,
         isFalsePositive: false,
       }
+      // Sanitise exploitability to the allowed enum values; null when absent/invalid.
+      const exploitability: ExploitabilityLevel | null =
+        enriched.exploitability === "high" ||
+        enriched.exploitability === "medium" ||
+        enriched.exploitability === "low"
+          ? enriched.exploitability
+          : null
       results.push({
         ...finding,
         triageSeverity: enriched.triageSeverity,
@@ -309,6 +646,7 @@ ${JSON.stringify(
         owaspCategory: enriched.owaspCategory || finding.owaspCategory || "",
         cvssScore: enriched.cvssScore || finding.cvssScore || "",
         remediation: enriched.remediation,
+        exploitability,
         isFalsePositive: enriched.isFalsePositive ?? false,
         fingerprint: makeFingerprint(finding),
       })
@@ -449,4 +787,178 @@ Do NOT include any text outside the JSON object.
     const fallback = `## Security Scan Report\n\n**Repository:** ${repository} · **Branch:** ${branch}\n\n**Risk Score:** ${riskScore}/100\n\n| Severity | Count |\n|---|---|\n${Object.entries(summary).map(([s, c]) => `| ${s} | ${c} |`).join("\n")}\n\n*AI report generation failed — please review findings manually.*`
     return { markdown: fallback, riskScore, summary }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. correlateFindings — cross-tool attack-chain detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Minimal finding shape needed for correlation. */
+export interface CorrelationInput {
+  id: string
+  title: string
+  severity: SeverityLevel
+  tool: string
+  filePath: string | null
+  cweId: string | null
+}
+
+/**
+ * Sends the full set of a scan's findings to Gemini in ONE request and asks
+ * which combine into a single attack chain (e.g. an SSRF that reaches a
+ * hardcoded cloud credential). Returns the groups; the caller is responsible
+ * for tagging + severity elevation. Best-effort: returns [] on any failure.
+ */
+export async function correlateFindings(
+  findings: CorrelationInput[],
+  techStack?: TechStack | null,
+): Promise<CorrelationGroup[]> {
+  // Need at least two findings to form a chain, and an API key to call out.
+  if (findings.length < 2 || !GEMINI_API_KEY) return []
+
+  const techLine = techStack?.summary ? `This codebase uses: ${techStack.summary}\n\n` : ""
+  const prompt = `${techLine}You are a senior application security engineer performing CROSS-TOOL CORRELATION.
+Below is the complete set of findings from a single security scan, each with a stable "id".
+Identify which findings COMBINE into a single real-world ATTACK CHAIN — where one finding
+meaningfully enables or amplifies another (e.g. "SSRF reaches an endpoint that exposes a
+hardcoded AWS key", or "path traversal reads a file that a separate finding logs unsanitised").
+
+Rules:
+- Only group findings that are GENUINELY related into an exploit path. Do NOT group unrelated
+  issues just because they share a severity or file.
+- Every group MUST have at least 2 members.
+- "severity" is the severity the whole chain should carry — never lower than the highest
+  individual member's severity.
+- If nothing correlates, return {"groups": []}.
+
+Return ONLY this JSON object:
+{ "groups": [ { "memberIds": ["<id>", "<id>"], "label": "<short chain name>", "severity": "critical|high|medium|low|info", "rationale": "<1-2 sentences>" } ] }
+
+FINDINGS:
+${JSON.stringify(
+  findings.map((f) => ({
+    id: f.id,
+    title: f.title,
+    severity: f.severity,
+    tool: f.tool,
+    file: f.filePath,
+    cwe: f.cweId,
+  })),
+  null,
+  2,
+)}
+`
+
+  try {
+    const raw = await callGemini(prompt)
+    const parsed = JSON.parse(raw) as { groups?: CorrelationGroup[] }
+    const groups = (parsed.groups ?? []).filter(
+      (g) => Array.isArray(g.memberIds) && g.memberIds.length >= 2,
+    )
+    return groups
+  } catch (err) {
+    console.error("[ai] correlateFindings error:", err)
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. detectTechStack — framework/language profile from the repo's manifest
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Maps a notable dependency name to the framework it implies. */
+const FRAMEWORK_HINTS: Record<string, string> = {
+  next: "Next.js", react: "React", vue: "Vue", "@angular/core": "Angular",
+  svelte: "Svelte", nuxt: "Nuxt", express: "Express", "@nestjs/core": "NestJS",
+  fastify: "Fastify", koa: "Koa", django: "Django", flask: "Flask",
+  fastapi: "FastAPI", rails: "Ruby on Rails", sinatra: "Sinatra",
+  gin: "Gin", echo: "Echo", fiber: "Fiber", chi: "chi",
+  "spring-boot": "Spring Boot", spring: "Spring",
+}
+
+/** Builds a compact human summary for the AI prompt header. */
+function buildSummary(language: string | null, framework: string | null, deps: string[]): string {
+  const parts: string[] = []
+  if (framework) parts.push(framework)
+  parts.push(...deps.filter((d) => d.toLowerCase() !== framework?.toLowerCase()).slice(0, 5))
+  const head = parts.length ? parts.join(", ") : (language ?? "unknown stack")
+  return language ? `${head} (${language})` : head
+}
+
+/** Parses one recognised manifest file into a TechStack profile. */
+function parseManifest(manifest: string, content: string): TechStack | null {
+  try {
+    if (manifest === "package.json") {
+      const pkg = JSON.parse(content) as {
+        dependencies?: Record<string, string>
+        devDependencies?: Record<string, string>
+      }
+      const names = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) })
+      if (names.length === 0) return null
+      const framework = names.map((n) => FRAMEWORK_HINTS[n]).find(Boolean) ?? null
+      const language = names.includes("typescript") ? "TypeScript/Node.js" : "JavaScript/Node.js"
+      const deps = names.filter((n) => FRAMEWORK_HINTS[n] || ["drizzle-orm", "prisma", "@prisma/client", "mongoose", "sequelize", "typeorm", "graphql", "tailwindcss"].includes(n))
+      return { language, framework, dependencies: deps.slice(0, 8), manifest, summary: buildSummary(language, framework, deps) }
+    }
+
+    if (manifest === "requirements.txt") {
+      const names = content
+        .split("\n")
+        .map((l) => l.trim().split(/[=<>!~ ]/)[0].toLowerCase())
+        .filter((n) => n && !n.startsWith("#"))
+      if (names.length === 0) return null
+      const framework = names.map((n) => FRAMEWORK_HINTS[n]).find(Boolean) ?? null
+      return { language: "Python", framework, dependencies: names.slice(0, 8), manifest, summary: buildSummary("Python", framework, names) }
+    }
+
+    if (manifest === "Gemfile") {
+      const names = Array.from(content.matchAll(/gem\s+['"]([\w-]+)['"]/g)).map((m) => m[1].toLowerCase())
+      if (names.length === 0) return null
+      const framework = names.map((n) => FRAMEWORK_HINTS[n]).find(Boolean) ?? null
+      return { language: "Ruby", framework, dependencies: names.slice(0, 8), manifest, summary: buildSummary("Ruby", framework, names) }
+    }
+
+    if (manifest === "go.mod") {
+      const names = Array.from(content.matchAll(/\s([\w.\-/]+)\s+v\d/g)).map((m) => {
+        const full = m[1]
+        return (full.split("/").pop() ?? full).toLowerCase()
+      })
+      const framework = names.map((n) => FRAMEWORK_HINTS[n]).find(Boolean) ?? null
+      return { language: "Go", framework, dependencies: names.slice(0, 8), manifest, summary: buildSummary("Go", framework, names) }
+    }
+
+    if (manifest === "pom.xml") {
+      const names = Array.from(content.matchAll(/<artifactId>([\w.\-]+)<\/artifactId>/g)).map((m) => m[1].toLowerCase())
+      if (names.length === 0) return null
+      const framework = names.map((n) => FRAMEWORK_HINTS[n]).find(Boolean) ?? null
+      return { language: "Java", framework, dependencies: names.slice(0, 8), manifest, summary: buildSummary("Java", framework, names) }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/**
+ * Fetches the repo's dependency manifest (package.json, requirements.txt,
+ * Gemfile, go.mod or pom.xml — whichever exists first) from the default
+ * branch and derives a {@link TechStack} profile. Returns null when no
+ * recognised manifest is found or every fetch fails — callers must treat the
+ * whole step as best-effort and continue the scan regardless.
+ */
+export async function detectTechStack(
+  repository: string,
+  token: string | null,
+): Promise<TechStack | null> {
+  if (!repository) return null
+  const cache = new Map<string, string | null>()
+  // Order matters: most specific / most common ecosystems first.
+  const manifests = ["package.json", "requirements.txt", "Gemfile", "go.mod", "pom.xml"]
+  for (const manifest of manifests) {
+    const content = await ghFetchRaw(repository, manifest, token, cache)
+    if (!content) continue
+    const ts = parseManifest(manifest, content)
+    if (ts) return ts
+  }
+  return null
 }
