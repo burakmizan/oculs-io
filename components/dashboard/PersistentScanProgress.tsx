@@ -22,7 +22,16 @@ export function PersistentScanProgress() {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       try {
-        setActiveScan(JSON.parse(raw))
+        const parsed = JSON.parse(raw) as ActiveScan
+        // Only restore if scan was started in the last 2 hours — stale scans auto-clear
+        const stored = localStorage.getItem(STORAGE_KEY + "_ts")
+        const ts = stored ? parseInt(stored, 10) : 0
+        if (Date.now() - ts < 2 * 60 * 60 * 1000) {
+          setActiveScan(parsed)
+        } else {
+          localStorage.removeItem(STORAGE_KEY)
+          localStorage.removeItem(STORAGE_KEY + "_ts")
+        }
       } catch { /* invalid JSON */ }
     }
 

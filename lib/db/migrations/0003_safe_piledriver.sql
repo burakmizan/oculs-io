@@ -1,1 +1,1 @@
-ALTER TABLE "users" ADD COLUMN "plan" text DEFAULT 'starter' NOT NULL;
+-- ALTER TABLE "users" ADD COLUMN "plan" text DEFAULT 'starter' NOT NULL;

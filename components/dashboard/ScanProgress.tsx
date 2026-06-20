@@ -38,6 +38,7 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
   // Persist scan info so Dynamic Island survives page navigation
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ scanId, repoName, toolCount }))
+    localStorage.setItem(STORAGE_KEY + "_ts", String(Date.now()))
     return () => {
       // Clean up only when scan is done
     }

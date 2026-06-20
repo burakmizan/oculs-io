@@ -1,3 +1,3 @@
-ALTER TYPE "public"."scan_tool" ADD VALUE 'eslint_security' BEFORE 'owasp_zap';--> statement-breakpoint
-ALTER TYPE "public"."scan_tool" ADD VALUE 'npm_audit' BEFORE 'owasp_zap';--> statement-breakpoint
-ALTER TYPE "public"."scan_tool" ADD VALUE 'detect_secrets' BEFORE 'owasp_zap';
+-- ALTER TYPE "public"."scan_tool" ADD VALUE 'eslint_security' BEFORE 'owasp_zap';--> statement-breakpoint
+-- ALTER TYPE "public"."scan_tool" ADD VALUE 'npm_audit' BEFORE 'owasp_zap';--> statement-breakpoint
+-- ALTER TYPE "public"."scan_tool" ADD VALUE 'detect_secrets' BEFORE 'owasp_zap';
