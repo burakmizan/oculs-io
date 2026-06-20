@@ -128,7 +128,8 @@ export async function createScan(
       tools,
     })
     revalidatePath("/dashboard")
-  } catch {
+  } catch (err) {
+    console.error("[createScan] queueScan failed:", err)
     return {
       error: "Couldn't queue the scan — the database isn't reachable. Check DATABASE_URL.",
     }

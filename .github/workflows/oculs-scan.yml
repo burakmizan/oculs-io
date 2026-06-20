@@ -16,10 +16,6 @@
 name: Oculs Security Scan
 
 on:
-  push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       scan_id:
