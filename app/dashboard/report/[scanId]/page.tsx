@@ -150,6 +150,20 @@ export default async function ReportPage({ params, searchParams }: Props) {
     }, 0)
   ))
 
+  const exploitOrder = ["high", "medium", "low"] as const
+  const highestExploit = exploitOrder.find(l => vulns.some(v => v.exploitability === l)) ?? null
+  const uniqueCweCount = new Set(vulns.filter(v => v.cweId).map(v => v.cweId)).size
+  const uniqueOwaspCount = new Set(vulns.filter(v => v.owaspCategory).map(v => v.owaspCategory)).size
+  const uniqueChains = new Set(vulns.filter(v => v.correlationGroup).map(v => v.correlationGroup)).size
+
+  const overviewStats: { label: string; value: string; highlight?: boolean }[] = [
+    { label: "risk score", value: String(riskScore) },
+    { label: "exploitability", value: highestExploit ?? "—" },
+    { label: "unique cwes", value: uniqueCweCount > 0 ? String(uniqueCweCount) : "—" },
+    { label: "owasp cats", value: uniqueOwaspCount > 0 ? String(uniqueOwaspCount) : "—" },
+    ...(uniqueChains > 0 ? [{ label: "attack chains", value: `${uniqueChains} detected`, highlight: true }] : []),
+  ]
+
   const formatDate = (d: Date) =>
     new Intl.DateTimeFormat("en-US", {
       month: "short", day: "numeric", year: "numeric",
@@ -186,6 +200,29 @@ export default async function ReportPage({ params, searchParams }: Props) {
           </p>
         </div>
       </div>
+
+      {/* Security Overview strip */}
+      {vulns.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {overviewStats.map((s) => (
+            <div key={s.label}
+              className={`flex flex-col px-3 py-2.5 rounded-[8px] border ${
+                s.highlight
+                  ? "border-[#a78bfa]/30 bg-[#a78bfa]/[0.04]"
+                  : "border-white/10 bg-white/[0.02]"
+              }`}>
+              <span className="text-[9px] font-mono uppercase tracking-[0.08em] text-[#444444] mb-0.5">
+                {s.label}
+              </span>
+              <span
+                className={`text-[14px] font-mono font-semibold ${s.highlight ? "text-[#a78bfa]" : "text-white"}`}
+                style={{ letterSpacing: "-0.42px" }}>
+                {s.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Severity summary */}
       <div className="grid grid-cols-5 gap-2 mb-6">

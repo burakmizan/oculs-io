@@ -93,6 +93,10 @@ export interface DashboardStats {
   scans: number
   openVulnerabilities: number
   riskScore: number | null
+  /** Critical+high findings with fixAppliedAt in the last 30 days. */
+  closedLast30d: number
+  /** Critical+high findings created in the last 30 days. */
+  openedLast30d: number
 }
 
 /* ── Webhook ingestion contract (GitHub Actions → /api/webhook/scan) ── */

@@ -34,6 +34,8 @@ const EMPTY_STATS: DashboardStats = {
   scans: 0,
   openVulnerabilities: 0,
   riskScore: null,
+  closedLast30d: 0,
+  openedLast30d: 0,
 }
 
 /** Plan-aware display limits for the Usage card. null = unlimited (∞). */
@@ -149,7 +151,7 @@ export default async function DashboardPage() {
       <RiskTrend points={riskTrend} />
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-8">
         {[
           { label: "Repositories", value: stats.projects },
           { label: "Total Scans", value: stats.scans },
@@ -166,6 +168,19 @@ export default async function DashboardPage() {
             </p>
           </div>
         ))}
+        {/* 30-day trend boxes */}
+        <div className="bg-white/[0.02] border border-white/10 rounded-[10px] px-5 py-4">
+          <p className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#444444] mb-2">↓ 30d Closed</p>
+          <p className="text-[28px] font-semibold text-[#4ade80]" style={{ letterSpacing: "-1.12px" }}>
+            {stats.closedLast30d}
+          </p>
+        </div>
+        <div className="bg-white/[0.02] border border-white/10 rounded-[10px] px-5 py-4">
+          <p className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#444444] mb-2">↑ 30d Opened</p>
+          <p className="text-[28px] font-semibold text-[#f87171]" style={{ letterSpacing: "-1.12px" }}>
+            {stats.openedLast30d}
+          </p>
+        </div>
       </div>
 
       {/* Recent scans */}

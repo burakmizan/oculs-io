@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { auth } from "@/auth"
-import { getProjectSettings, getVulnerabilityTimeline } from "@/lib/db/queries"
+import { getProjectSettings, getVulnerabilityTimeline, getProjectScanTimeline } from "@/lib/db/queries"
 import { ScheduleSettings } from "@/components/dashboard/ScheduleSettings"
 import { DangerZone } from "@/components/dashboard/DangerZone"
 import { SecurityCardSnippet } from "@/components/dashboard/SecurityCardSnippet"
@@ -15,9 +15,10 @@ export default async function ProjectSettingsPage({ params }: { params: Promise<
   const session = await auth()
   const userId = session!.user.id
 
-  const [settings, timeline] = await Promise.all([
+  const [settings, timeline, scanTimeline] = await Promise.all([
     getProjectSettings(id, userId),
     getVulnerabilityTimeline(id, userId),
+    getProjectScanTimeline(id, userId),
   ])
   if (!settings) notFound()
 
@@ -39,7 +40,7 @@ export default async function ProjectSettingsPage({ params }: { params: Promise<
         <div className="px-5 py-4 border-b border-white/[0.07]">
           <h2 className="text-[13px] font-mono uppercase tracking-[0.08em] text-[#a1a1aa]">Vulnerability Timeline</h2>
         </div>
-        <VulnerabilityTimeline data={timeline} />
+        <VulnerabilityTimeline data={timeline} scanData={scanTimeline} />
       </div>
 
       {/* Security Score Card badge snippet (feature 6) */}

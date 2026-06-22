@@ -193,26 +193,44 @@ export function ScanProgress({ scanId, repoName, toolCount, onClose }: ScanProgr
 
           {toolProgress.length > 0 ? (
             <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
-              {toolProgress.map((tp, i) => (
-                <div key={`${tp.tool}-${i}`} className="flex items-center gap-2.5">
-                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#4ade80]" />
-                  <span className="text-[12px] font-mono text-[#555555]" style={{ letterSpacing: "-0.14px" }}>
-                    <span className="text-white">{tp.tool}</span>
-                    {" ✓ — "}
-                    <span className={tp.findingCount > 0 ? "text-[#fbbf24]" : "text-[#555555]"}>
-                      {tp.findingCount} finding{tp.findingCount !== 1 ? "s" : ""}
+              {toolProgress.map((tp, i) => {
+                const timeStr = tp.completedAt
+                  ? (() => {
+                      try { return new Date(tp.completedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) }
+                      catch { return "" }
+                    })()
+                  : ""
+                const displayName = tp.tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+                return (
+                  <div key={`${tp.tool}-${i}`} className="flex items-center gap-2.5">
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#4ade80]" />
+                    <span className="text-[12px] font-mono" style={{ letterSpacing: "-0.14px" }}>
+                      <span className="text-white">{displayName}</span>
+                      {timeStr && <span className="text-[#444444]"> · {timeStr}</span>}
+                      <span className="text-[#444444]"> · </span>
+                      <span className={tp.findingCount > 0 ? "text-[#fbbf24]" : "text-[#555555]"}>
+                        {tp.findingCount} finding{tp.findingCount !== 1 ? "s" : ""}
+                      </span>
                     </span>
-                  </span>
-                </div>
-              ))}
-              {!isDone && !isFailed && (
-                <div className="flex items-center gap-2.5 mt-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#60a5fa] animate-pulse" />
-                  <span className="text-[12px] font-mono text-white" style={{ letterSpacing: "-0.14px" }}>
-                    Scanning…
-                  </span>
-                </div>
-              )}
+                  </div>
+                )
+              })}
+              {!isDone && !isFailed && (() => {
+                const remaining = Math.max(0, toolCount - toolProgress.length)
+                return remaining > 0 ? (
+                  <div className="flex items-center gap-2.5 mt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#60a5fa] animate-pulse" />
+                    <span className="text-[12px] font-mono text-[#a1a1aa]" style={{ letterSpacing: "-0.14px" }}>
+                      {remaining} tool{remaining !== 1 ? "s" : ""} running…
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2.5 mt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-[#60a5fa] animate-pulse" />
+                    <span className="text-[12px] font-mono text-[#a1a1aa]">Finalizing…</span>
+                  </div>
+                )
+              })()}
             </div>
           ) : (
             <div className="flex flex-col gap-1.5 max-h-[200px] overflow-hidden">

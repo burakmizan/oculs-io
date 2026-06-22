@@ -211,7 +211,10 @@ export async function getDashboardStats(
     ? eq(vulnerabilities.userId, userId)
     : inArray(vulnerabilities.projectId, db.select({ id: projects.id }).from(projects).where(eq((projects as any).teamId, activeTeamId)))
 
-  const [projectCount, scanCount, openBySeverity] = await Promise.all([
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+  const [projectCount, scanCount, openBySeverity, closedRows, openedRows] = await Promise.all([
     db.select({ c: count() }).from(projects).where(projectCondition),
     db.select({ c: count() }).from(scans).where(scanCondition),
     db
@@ -224,6 +227,21 @@ export async function getDashboardStats(
         ),
       )
       .groupBy(vulnerabilities.severity),
+    db.select({ c: count() }).from(vulnerabilities).where(
+      and(
+        vulnCondition,
+        inArray(vulnerabilities.severity as any, ["critical", "high"]),
+        isNotNull(vulnerabilities.fixAppliedAt),
+        gte(vulnerabilities.fixAppliedAt, thirtyDaysAgo),
+      )
+    ),
+    db.select({ c: count() }).from(vulnerabilities).where(
+      and(
+        vulnCondition,
+        inArray(vulnerabilities.severity as any, ["critical", "high"]),
+        gte(vulnerabilities.createdAt, thirtyDaysAgo),
+      )
+    ),
   ])
 
   const openVulnerabilities = openBySeverity.reduce((sum, r) => sum + r.c, 0)
@@ -238,6 +256,8 @@ export async function getDashboardStats(
     openVulnerabilities,
     // No scans yet → no meaningful score.
     riskScore: (scanCount[0]?.c ?? 0) === 0 ? null : Math.min(100, weighted),
+    closedLast30d: closedRows[0]?.c ?? 0,
+    openedLast30d: openedRows[0]?.c ?? 0,
   }
 }
 
@@ -1063,5 +1083,49 @@ export async function resolveApiKeyUser(rawKey: string): Promise<string | null> 
     return row.userId
   } catch {
     return null
+  }
+}
+
+/* ── Scan-level timeline per project (settings page) ──────────────── */
+
+export interface ScanTimelinePoint {
+  scanId: string
+  date: Date
+  riskScore: number
+  findingCount: number
+}
+
+export async function getProjectScanTimeline(
+  projectId: string,
+  userId: string,
+): Promise<ScanTimelinePoint[]> {
+  try {
+    const rows = await db
+      .select({
+        id: scans.id,
+        createdAt: scans.createdAt,
+        summary: scans.summary,
+        vulnerabilitiesCount: scans.vulnerabilitiesCount,
+      })
+      .from(scans)
+      .where(
+        and(
+          eq(scans.projectId, projectId),
+          eq(scans.userId, userId),
+          eq(scans.status, "completed"),
+        ),
+      )
+      .orderBy(scans.createdAt)
+
+    return rows.map((r) => ({
+      scanId: r.id,
+      date: r.createdAt,
+      riskScore: typeof (r.summary as any)?.riskScore === "number"
+        ? (r.summary as any).riskScore
+        : 0,
+      findingCount: r.vulnerabilitiesCount ?? 0,
+    }))
+  } catch {
+    return []
   }
 }
