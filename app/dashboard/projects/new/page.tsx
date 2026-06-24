@@ -1,16 +1,21 @@
 "use client"
 
-import { useActionState, useEffect, useState } from "react"
+import { useActionState, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createProject, type ProjectActionState } from "@/app/dashboard/projects/actions"
 import { UpgradeModal } from "@/components/dashboard/UpgradeModal"
 
 const INIT: ProjectActionState = {}
 
+type SourceType = "github" | "zip"
+
 export default function NewProjectPage() {
   const router = useRouter()
   const [state, action, pending] = useActionState(createProject, INIT)
   const [targetEntries, setTargetEntries] = useState<string[]>([""])
+
+  // Source type toggle
+  const [sourceType, setSourceType] = useState<SourceType>("github")
 
   // GitHub repos
   const [githubRepos, setGithubRepos] = useState<{ fullName: string; private: boolean; language: string | null }[]>([])
@@ -21,8 +26,16 @@ export default function NewProjectPage() {
   const [manualRepo, setManualRepo] = useState("")
   const [useManual, setUseManual] = useState(false)
 
+  // ZIP upload state
+  const [zipFile, setZipFile] = useState<File | null>(null)
+  const [zipPending, setZipPending] = useState(false)
+  const [zipError, setZipError] = useState("")
+  const [isDragOver, setIsDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [showUpgrade, setShowUpgrade] = useState(false)
+
   useEffect(() => {
-    // Fetch GitHub repos on mount
     setReposLoading(true)
     fetch("/api/github/repos")
       .then(r => r.json())
@@ -30,8 +43,6 @@ export default function NewProjectPage() {
       .catch(() => {})
       .finally(() => setReposLoading(false))
   }, [])
-
-  const [showUpgrade, setShowUpgrade] = useState(false)
 
   useEffect(() => {
     if (state.ok) router.push("/dashboard/projects")
@@ -52,15 +63,68 @@ export default function NewProjectPage() {
 
   const repoValue = useManual ? manualRepo : selectedRepo
 
+  function handleZipDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    setIsDragOver(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file && file.name.endsWith(".zip")) setZipFile(file)
+  }
+
+  async function handleZipSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!zipFile || zipPending) return
+
+    setZipPending(true)
+    setZipError("")
+
+    const fd = new FormData(e.currentTarget)
+    fd.set("zipFile", zipFile, zipFile.name)
+
+    try {
+      const res = await fetch("/api/upload/zip", { method: "POST", body: fd })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (data.error === "UPGRADE_REQUIRED_PROJECTS") {
+        setShowUpgrade(true)
+      } else if (data.error) {
+        setZipError(data.error)
+      } else if (data.ok) {
+        router.push("/dashboard/projects")
+      }
+    } catch {
+      setZipError("Upload failed. Check your connection and try again.")
+    } finally {
+      setZipPending(false)
+    }
+  }
+
+  const displayError =
+    sourceType === "github"
+      ? (state.error && state.error !== "UPGRADE_REQUIRED_PROJECTS" ? state.error : undefined)
+      : (zipError || undefined)
+
+  const isSubmitDisabled =
+    sourceType === "github"
+      ? (pending || !repoValue)
+      : (zipPending || !zipFile)
+
+  const submitLabel =
+    sourceType === "github"
+      ? (pending    ? "Creating…"  : "Create Project")
+      : (zipPending ? "Analyzing…" : "Create & Analyze")
+
   return (
     <div className="p-8 max-w-[640px] mx-auto">
       <div className="mb-6">
         <p className="text-[14px] text-[#666666]" style={{ letterSpacing: "-0.28px" }}>
-          Connect a repository and configure scan targets.
+          Connect a repository or upload a ZIP archive to scan.
         </p>
       </div>
 
-      <form action={action} className="flex flex-col gap-5">
+      <form
+        action={sourceType === "github" ? action : undefined}
+        onSubmit={sourceType === "zip" ? handleZipSubmit : undefined}
+        className="flex flex-col gap-5"
+      >
 
         {/* Project name */}
         <div className="flex flex-col gap-1.5">
@@ -99,125 +163,231 @@ export default function NewProjectPage() {
           />
         </div>
 
-        {/* GitHub repo — switcher */}
+        {/* Source type toggle */}
         <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <label className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666]">
-              GitHub Repository <span className="text-[#f87171]">*</span>
-            </label>
+          <label className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666]">
+            Source <span className="text-[#f87171]">*</span>
+          </label>
+          <div className="flex items-center gap-1 p-1 rounded-[8px] bg-white/[0.02] border border-white/10">
             <button
               type="button"
-              onClick={() => setUseManual(m => !m)}
-              className="text-[11px] font-mono text-[#555555] hover:text-[#a1a1aa] transition-colors"
+              onClick={() => setSourceType("github")}
+              className={`flex-1 h-8 rounded-[6px] text-[12px] font-mono transition-colors ${
+                sourceType === "github"
+                  ? "bg-white/10 text-white"
+                  : "text-[#555555] hover:text-[#a1a1aa]"
+              }`}
+              style={{ letterSpacing: "-0.14px" }}
             >
-              {useManual ? "← Pick from list" : "Enter manually →"}
+              GitHub Repository
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourceType("zip")}
+              className={`flex-1 h-8 rounded-[6px] text-[12px] font-mono transition-colors ${
+                sourceType === "zip"
+                  ? "bg-white/10 text-white"
+                  : "text-[#555555] hover:text-[#a1a1aa]"
+              }`}
+              style={{ letterSpacing: "-0.14px" }}
+            >
+              Upload ZIP
             </button>
           </div>
+        </div>
 
-          {/* Hidden field for form submission */}
-          <input type="hidden" name="repoFullName" value={repoValue} />
-
-          {useManual ? (
-            /* Manual input */
-            <input
-              type="text"
-              value={manualRepo}
-              onChange={e => setManualRepo(e.target.value)}
-              placeholder="owner/repo or https://github.com/owner/repo"
-              className="h-10 px-3 rounded-[8px] bg-white/[0.02] border border-white/10
-                         text-[14px] text-white placeholder:text-[#444444] font-mono
-                         focus:border-white/25 focus:bg-white/[0.04]
-                         focus-visible:outline-none transition-colors"
-              style={{ letterSpacing: "-0.14px" }}
-            />
-          ) : (
-            /* Dropdown switcher */
-            <div className="relative">
+        {/* GitHub repo section */}
+        {sourceType === "github" && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666]">
+                GitHub Repository <span className="text-[#f87171]">*</span>
+              </label>
               <button
                 type="button"
-                onClick={() => setRepoDropdownOpen(o => !o)}
-                className={`w-full flex items-center justify-between h-10 px-3 rounded-[8px] border text-left transition-colors
-                  ${selectedRepo
-                    ? "border-white/25 bg-white/[0.04] text-white"
-                    : "border-white/10 bg-white/[0.02] text-[#444444]"
-                  }`}
+                onClick={() => setUseManual(m => !m)}
+                className="text-[11px] font-mono text-[#555555] hover:text-[#a1a1aa] transition-colors"
               >
-                <span className="text-[13px] font-mono truncate" style={{ letterSpacing: "-0.14px" }}>
-                  {reposLoading ? "Loading repositories…" : selectedRepo || "Select a repository…"}
-                </span>
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0 ml-2 text-[#555555]">
-                  <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                {useManual ? "← Pick from list" : "Enter manually →"}
               </button>
+            </div>
 
-              {repoDropdownOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1 z-50
-                                bg-[#0a0a0a] border border-white/15 rounded-[10px] overflow-hidden shadow-2xl">
-                  {/* Search */}
-                  <div className="p-2 border-b border-white/[0.07]">
-                    <input
-                      type="text"
-                      placeholder="Search repositories…"
-                      value={repoSearch}
-                      onChange={e => setRepoSearch(e.target.value)}
-                      autoFocus
-                      className="w-full h-8 px-3 rounded-[6px] bg-white/[0.04] border border-white/10
-                                 text-[12px] text-white placeholder:text-[#444444] font-mono
-                                 focus:border-white/20 focus-visible:outline-none transition-colors"
-                    />
-                  </div>
+            {/* Hidden field for form submission */}
+            <input type="hidden" name="repoFullName" value={repoValue} />
 
-                  {/* Repo list */}
-                  <div className="max-h-[240px] overflow-y-auto">
-                    {reposLoading ? (
-                      <div className="flex items-center justify-center py-8">
-                        <span className="text-[12px] font-mono text-[#444444]">Loading…</span>
-                      </div>
-                    ) : filteredRepos.length === 0 ? (
-                      <div className="flex items-center justify-center py-8">
-                        <span className="text-[12px] font-mono text-[#444444]">No repositories found</span>
-                      </div>
-                    ) : filteredRepos.map(r => {
-                      const isOn = selectedRepo === r.fullName
-                      return (
-                        <button
-                          key={r.fullName}
-                          type="button"
-                          onClick={() => {
-                            setSelectedRepo(r.fullName)
-                            setRepoDropdownOpen(false)
-                            setRepoSearch("")
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors
-                            ${isOn ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"}`}
-                        >
-                          <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
-                            isOn ? "border-white bg-white" : "border-white/20"
-                          }`}>
-                            {isOn && <span className="w-1.5 h-1.5 rounded-full bg-black block" />}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[13px] font-mono text-white truncate" style={{ letterSpacing: "-0.14px" }}>
-                              {r.fullName}
-                            </p>
-                            {r.language && (
-                              <p className="text-[10px] font-mono text-[#444444]">{r.language}</p>
-                            )}
-                          </div>
-                          {r.private && (
-                            <span className="text-[10px] font-mono text-[#555555] border border-white/10 px-1.5 py-0.5 rounded-[4px]">
-                              private
+            {useManual ? (
+              <input
+                type="text"
+                value={manualRepo}
+                onChange={e => setManualRepo(e.target.value)}
+                placeholder="owner/repo or https://github.com/owner/repo"
+                className="h-10 px-3 rounded-[8px] bg-white/[0.02] border border-white/10
+                           text-[14px] text-white placeholder:text-[#444444] font-mono
+                           focus:border-white/25 focus:bg-white/[0.04]
+                           focus-visible:outline-none transition-colors"
+                style={{ letterSpacing: "-0.14px" }}
+              />
+            ) : (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setRepoDropdownOpen(o => !o)}
+                  className={`w-full flex items-center justify-between h-10 px-3 rounded-[8px] border text-left transition-colors
+                    ${selectedRepo
+                      ? "border-white/25 bg-white/[0.04] text-white"
+                      : "border-white/10 bg-white/[0.02] text-[#444444]"
+                    }`}
+                >
+                  <span className="text-[13px] font-mono truncate" style={{ letterSpacing: "-0.14px" }}>
+                    {reposLoading ? "Loading repositories…" : selectedRepo || "Select a repository…"}
+                  </span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0 ml-2 text-[#555555]">
+                    <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+
+                {repoDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-50
+                                  bg-[#0a0a0a] border border-white/15 rounded-[10px] overflow-hidden shadow-2xl">
+                    <div className="p-2 border-b border-white/[0.07]">
+                      <input
+                        type="text"
+                        placeholder="Search repositories…"
+                        value={repoSearch}
+                        onChange={e => setRepoSearch(e.target.value)}
+                        autoFocus
+                        className="w-full h-8 px-3 rounded-[6px] bg-white/[0.04] border border-white/10
+                                   text-[12px] text-white placeholder:text-[#444444] font-mono
+                                   focus:border-white/20 focus-visible:outline-none transition-colors"
+                      />
+                    </div>
+
+                    <div className="max-h-[240px] overflow-y-auto">
+                      {reposLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                          <span className="text-[12px] font-mono text-[#444444]">Loading…</span>
+                        </div>
+                      ) : filteredRepos.length === 0 ? (
+                        <div className="flex items-center justify-center py-8">
+                          <span className="text-[12px] font-mono text-[#444444]">No repositories found</span>
+                        </div>
+                      ) : filteredRepos.map(r => {
+                        const isOn = selectedRepo === r.fullName
+                        return (
+                          <button
+                            key={r.fullName}
+                            type="button"
+                            onClick={() => {
+                              setSelectedRepo(r.fullName)
+                              setRepoDropdownOpen(false)
+                              setRepoSearch("")
+                            }}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors
+                              ${isOn ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"}`}
+                          >
+                            <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
+                              isOn ? "border-white bg-white" : "border-white/20"
+                            }`}>
+                              {isOn && <span className="w-1.5 h-1.5 rounded-full bg-black block" />}
                             </span>
-                          )}
-                        </button>
-                      )
-                    })}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[13px] font-mono text-white truncate" style={{ letterSpacing: "-0.14px" }}>
+                                {r.fullName}
+                              </p>
+                              {r.language && (
+                                <p className="text-[10px] font-mono text-[#444444]">{r.language}</p>
+                              )}
+                            </div>
+                            {r.private && (
+                              <span className="text-[10px] font-mono text-[#555555] border border-white/10 px-1.5 py-0.5 rounded-[4px]">
+                                private
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ZIP upload section */}
+        {sourceType === "zip" && (
+          <div className="flex flex-col gap-2">
+            <label className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#666666]">
+              ZIP Archive <span className="text-[#f87171]">*</span>
+            </label>
+
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip"
+              className="hidden"
+              onChange={e => {
+                const f = e.target.files?.[0]
+                if (f) setZipFile(f)
+              }}
+            />
+
+            {/* Drop zone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setIsDragOver(true) }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={handleZipDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`flex flex-col items-center justify-center gap-2 h-[100px] rounded-[8px]
+                         border border-dashed cursor-pointer transition-colors select-none
+                         ${isDragOver
+                           ? "border-white/30 bg-white/[0.04]"
+                           : zipFile
+                             ? "border-white/20 bg-white/[0.02]"
+                             : "border-white/10 bg-white/[0.01] hover:border-white/20 hover:bg-white/[0.02]"
+                         }`}
+            >
+              {zipFile ? (
+                <div className="flex flex-col items-center gap-1">
+                  {/* Archive icon */}
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-white/60">
+                    <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.2"/>
+                    <path d="M7 6h2M7 8h2M7 10h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                    <path d="M1 5h14" stroke="currentColor" strokeWidth="1.2"/>
+                  </svg>
+                  <p className="text-[13px] font-mono text-white" style={{ letterSpacing: "-0.14px" }}>
+                    {zipFile.name}
+                  </p>
+                  <p className="text-[11px] font-mono text-[#555555]">
+                    {(zipFile.size / 1024 / 1024).toFixed(2)} MB
+                    {" · "}
+                    <span className="text-[#a1a1aa]">click to change</span>
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1.5">
+                  {/* Upload icon */}
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-[#555555]">
+                    <path d="M8 10V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M2 11v1.5A1.5 1.5 0 003.5 14h9A1.5 1.5 0 0014 12.5V11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                  </svg>
+                  <p className="text-[13px] text-[#666666]" style={{ letterSpacing: "-0.26px" }}>
+                    Drop <span className="font-mono text-white/60">.zip</span> here or{" "}
+                    <span className="text-white/80">browse</span>
+                  </p>
+                  <p className="text-[11px] font-mono text-[#444444]">
+                    .js .ts .py .go .java .rb .php .cs .cpp .rs .kt .swift · max 50 MB
+                  </p>
                 </div>
               )}
             </div>
-          )}
-        </div>
+
+            <p className="text-[11px] font-mono text-[#444444]">
+              Gemini analyzes up to 25 source files for security vulnerabilities.
+            </p>
+          </div>
+        )}
 
         {/* Target URLs */}
         <div className="flex flex-col gap-2">
@@ -273,22 +443,22 @@ export default function NewProjectPage() {
           />
         </div>
 
-        {state.error && state.error !== "UPGRADE_REQUIRED_PROJECTS" && (
+        {displayError && (
           <div className="flex items-center gap-2 px-3 py-2.5 rounded-[8px] border border-[#f87171]/20 bg-[#f87171]/[0.04]">
             <span className="w-1.5 h-1.5 rounded-full bg-[#f87171] flex-shrink-0" />
-            <p className="text-[12px] text-[#f87171]">{state.error}</p>
+            <p className="text-[12px] text-[#f87171]">{displayError}</p>
           </div>
         )}
 
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            disabled={pending || !repoValue}
+            disabled={isSubmitDisabled}
             className="h-10 px-5 rounded-[8px] bg-white text-black text-[13px] font-medium
                        hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             style={{ letterSpacing: "-0.26px" }}
           >
-            {pending ? "Creating…" : "Create Project"}
+            {submitLabel}
           </button>
           <a href="/dashboard/projects"
             className="h-10 px-4 rounded-[8px] border border-white/10 text-[13px] text-[#666666]
@@ -299,10 +469,10 @@ export default function NewProjectPage() {
         </div>
       </form>
 
-      <UpgradeModal 
-        isOpen={showUpgrade} 
-        onClose={() => setShowUpgrade(false)} 
-        feature="Project Limit Reached" 
+      <UpgradeModal
+        isOpen={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        feature="Project Limit Reached"
         description="The Starter plan is limited to 1 repository. Upgrade to Pro to ship continuously with unlimited repositories and advanced security coverage."
       />
     </div>

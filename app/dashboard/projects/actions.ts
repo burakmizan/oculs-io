@@ -38,7 +38,8 @@ export async function createProject(
     ? repoRaw.replace("https://github.com/", "").replace(/\/$/, "")
     : repoRaw
 
-  if (!REPO_RE.test(repoFullName)) {
+  // ZIP-sourced projects use "zip/<slug>" — skip the GitHub-specific regex check
+  if (!repoFullName.startsWith("zip/") && !REPO_RE.test(repoFullName)) {
     return { error: "Enter repository as owner/repo (e.g. acme/api)." }
   }
 
@@ -99,7 +100,7 @@ export async function createProject(
         name,
         description: description || null,
         repoFullName,
-        repoUrl: `https://github.com/${repoFullName}`,
+        repoUrl: repoFullName.startsWith("zip/") ? null : `https://github.com/${repoFullName}`,
         targetUrl: resolvedTargetUrl || null,
       })
       .onConflictDoUpdate({
