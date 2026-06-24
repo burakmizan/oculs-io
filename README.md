@@ -57,22 +57,8 @@ The architecture demonstrates that a production-grade B2B security SaaS can be b
 
 ## Architecture
 
-```
-Developer pushes code
-        │
-        ▼
-GitHub Actions (Semgrep + ZAP + Gitleaks)
-        │  POST JSON payload
-        ▼
-Vercel — Next.js /api/webhook/scan
-        │
-        ├─► Google Gemini AI  (triage + auto-fix patches)
-        │
-        └─► AWS Aurora PostgreSQL  (persist findings & fixes)
-                │
-                ▼
-        Next.js Dashboard (RSC — reads Aurora directly)
-```
+![Oculs.io Architecture Diagram](public/architecture.png)
+
 
 Full architecture details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
