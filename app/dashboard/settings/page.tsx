@@ -2,8 +2,8 @@ import type { Metadata } from "next"
 import { auth } from "@/auth"
 import { cookies } from "next/headers"
 import { db } from "@/lib/db"
-import { teams, teamMembers, users } from "@/lib/db/schema"
-import { eq } from "drizzle-orm"
+import { teams, teamMembers, users, accounts } from "@/lib/db/schema"
+import { eq, and } from "drizzle-orm"
 import { updateProfile, disconnectGitHub, deleteAccount, updateTeamName, removeTeamMember, inviteMembers } from "@/app/dashboard/actions"
 import { redirect } from "next/navigation"
 import { getUserApiKeys } from "@/lib/db/queries"
@@ -18,7 +18,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const { tab } = await searchParams
   const currentTab = tab === "team" ? "team" : "personal"
 
-  const isGitHubUser = !!session.user.login
+  const [githubAccount] = await db.select().from(accounts).where(and(eq(accounts.userId, session.user.id), eq(accounts.provider, "github"))).limit(1)
+  const isGitHubUser = !!githubAccount
   const cookieStore = await cookies()
   const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
 
@@ -99,7 +100,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <div>
                   <p className="text-[13px] text-white" style={{ letterSpacing: "-0.26px" }}>GitHub</p>
                   <p className="text-[11px] text-[#555555]">
-                    {isGitHubUser ? `Connected as @${session.user.login}` : "Not connected"}
+                    {isGitHubUser ? `Connected as @${session.user.login || 'GitHub User'}` : "Not connected"}
                   </p>
                 </div>
               </div>

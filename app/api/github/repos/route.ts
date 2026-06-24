@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/auth"
+import { db } from "@/lib/db"
+import { accounts } from "@/lib/db/schema"
+import { and, eq } from "drizzle-orm"
 
 /**
  * GET /api/github/repos
@@ -9,13 +12,24 @@ import { auth } from "@/auth"
 export async function GET() {
   const session = await auth()
 
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const token = session.user.githubAccessToken
   if (!token) {
     return NextResponse.json({ error: "No GitHub token — connect GitHub first" }, { status: 403 })
+  }
+
+  // KESİN ÇÖZÜM: Çerezde hayalet token (ghost token) kalsa bile, veritabanından koparılmışsa erişimi reddet!
+  const [githubAccount] = await db
+    .select()
+    .from(accounts)
+    .where(and(eq(accounts.userId, session.user.id), eq(accounts.provider, "github")))
+    .limit(1)
+
+  if (!githubAccount) {
+    return NextResponse.json({ error: "GitHub account disconnected" }, { status: 403 })
   }
 
   try {

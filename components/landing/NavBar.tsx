@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: "How it works",href: "#how-it-works" },
   { label: "Pricing",     href: "#pricing"   },
   { label: "Docs",        href: "/docs"      },
-  { label: "Open Source", href: "https://github.com/YOUR_USERNAME/oculs-ip" },
+  { label: "Open Source", href: "https://github.com/burakmizan/oculs-io" },
 ] as const;
 
 export function NavBar() {

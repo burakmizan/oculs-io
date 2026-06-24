@@ -5,37 +5,37 @@ const COLUMNS = [
   {
     heading: "PRODUCT",
     links: [
-      { label: "Features",    href: "#features"    },
-      { label: "Pricing",     href: "#pricing"     },
-      { label: "Changelog",   href: "/changelog"   },
-      { label: "Roadmap",     href: "/roadmap"     },
-      { label: "Status",      href: "/status"      },
+      { label: "Features",    href: "#features" },
+      { label: "Pricing",     href: "#pricing"  },
+      { label: "Changelog",   href: "#"         },
+      { label: "Roadmap",     href: "#"         },
+      { label: "Status",      href: "#"         },
     ],
   },
   {
     heading: "DEVELOPERS",
     links: [
-      { label: "Documentation", href: "/docs"            },
-      { label: "API Reference",  href: "/docs/api"       },
-      { label: "GitHub",         href: "https://github.com/YOUR_USERNAME/oculs-ip" },
-      { label: "Blog",           href: "/blog"           },
-      { label: "Quickstart",     href: "/docs/quickstart"},
+      { label: "Documentation", href: "#"                                       },
+      { label: "API Reference",  href: "#"                                      },
+      { label: "GitHub",         href: "https://github.com/burakmizan/oculs-io" },
+      { label: "Blog",           href: "#"                                      },
+      { label: "Quickstart",     href: "#"                                      },
     ],
   },
   {
     heading: "COMPANY",
     links: [
-      { label: "About",    href: "/about"   },
-      { label: "Security", href: "/security"},
-      { label: "Contact",  href: "/contact" },
+      { label: "About",    href: "#" },
+      { label: "Security", href: "#" },
+      { label: "Contact",  href: "#" },
     ],
   },
   {
     heading: "LEGAL",
     links: [
-      { label: "Privacy Policy",    href: "/privacy" },
-      { label: "Terms of Service",  href: "/terms"   },
-      { label: "Cookie Policy",     href: "/cookies" },
+      { label: "Privacy Policy",    href: "#" },
+      { label: "Terms of Service",  href: "#" },
+      { label: "Cookie Policy",     href: "#" },
     ],
   },
 ] as const;

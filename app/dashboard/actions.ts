@@ -137,9 +137,21 @@ export async function createScan(
 
   // Trigger GitHub Actions directly — token from session (GitHub OAuth)
   // or fall back to GITHUB_TOKEN env var (PAT set in Vercel).
-  const githubToken =
-    session.user.githubAccessToken ??
-    process.env.GITHUB_TOKEN
+  let userGithubToken = session.user.githubAccessToken
+  
+  // Hayalet token kontrolü: Kullanıcı GitHub hesabını ayırmışsa token'ı güvenlik gereği yoksay.
+  if (userGithubToken) {
+    const [githubAccount] = await db
+      .select()
+      .from(accounts)
+      .where(and(eq(accounts.userId, session.user.id), eq(accounts.provider, "github")))
+      .limit(1)
+    if (!githubAccount) {
+      userGithubToken = undefined
+    }
+  }
+
+  const githubToken = userGithubToken ?? process.env.GITHUB_TOKEN
 
   if (githubToken) {
     try {
@@ -286,6 +298,9 @@ export async function updateTeamName(teamId: string, name: string) {
   const session = await auth()
   if (!session?.user?.id) return { error: "Unauthorized" }
   try {
+    const [membership] = await db.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, session.user.id), eq(teamMembers.role, "owner"))).limit(1)
+    if (!membership) return { error: "Unauthorized: You must be a team owner." }
+
     await db.update(teams).set({ name }).where(eq(teams.id, teamId))
     revalidatePath("/dashboard/settings")
     return { ok: true }
@@ -298,6 +313,11 @@ export async function removeTeamMember(teamId: string, targetUserId: string) {
   const session = await auth()
   if (!session?.user?.id) return { error: "Unauthorized" }
   try {
+    if (session.user.id !== targetUserId) {
+      const [membership] = await db.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, session.user.id), eq(teamMembers.role, "owner"))).limit(1)
+      if (!membership) return { error: "Unauthorized: You must be a team owner to remove others." }
+    }
+
     await db.delete(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, targetUserId)))
     revalidatePath("/dashboard/settings")
     return { ok: true }

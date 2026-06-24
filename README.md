@@ -13,7 +13,7 @@
 
 **Oculs.io** scans your GitHub repositories for security vulnerabilities using AI, delivers instant triage and auto-fix patches, and stores everything in a zero-backend architecture — no servers to manage, no ops overhead.
 
-[Live Demo](#) · [Docs](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Report Bug](#)
+[Live Demo](https://oculs-io.vercel.app) · [Docs](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Report Bug](#)
 
 </div>
 
@@ -90,8 +90,8 @@ Full architecture details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/oculs-ip.git
-cd oculs-ip
+git clone https://github.com/burakmizan/oculs-io.git
+cd oculs-io
 npm install
 ```
 
@@ -155,7 +155,7 @@ Then add the provided `.github/workflows/oculs-scan.yml` (coming soon) to your r
 ## Project Structure
 
 ```
-oculs-ip/
+oculs-io/
 ├── app/
 │   ├── api/
 │   │   └── webhook/
@@ -179,7 +179,7 @@ oculs-ip/
 
 ### Vercel (Recommended)
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FYOUR_USERNAME%2Foculs-ip)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fburakmizan%2Foculs-io)
 
 1. Connect your GitHub repository to Vercel.
 2. Add all environment variables from `.env.example` in the Vercel dashboard under **Settings → Environment Variables**.
@@ -209,15 +209,15 @@ oculs-ip/
 
 ## Roadmap
 
-- [ ] Core webhook handler + HMAC validation
-- [ ] Drizzle schema + Aurora migrations
-- [ ] Gemini triage pipeline
-- [ ] Auto-fix patch generation
-- [ ] Dashboard — scan history & findings list
+- [x] Core webhook handler + HMAC validation
+- [x] Drizzle schema + Aurora migrations
+- [x] Gemini triage pipeline
+- [x] Auto-fix patch generation
+- [x] Dashboard — scan history & findings list
 - [ ] Dashboard — finding detail with diff viewer
 - [ ] GitHub App (replace PAT-based webhooks)
-- [ ] Slack / email alert notifications
-- [ ] API key authentication for B2B customers
+- [x] Slack / email alert notifications
+- [x] API key authentication for B2B customers
 - [ ] Usage-based billing integration (Stripe)
 - [ ] Multi-repo project support
 

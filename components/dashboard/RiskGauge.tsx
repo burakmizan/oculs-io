@@ -69,7 +69,7 @@ export function RiskGauge({ score, openFindings, totalScans }: Props) {
 
   return (
     <ReticleFrame className="rounded-[12px] mb-8">
-      <div className="relative oculs-grid rounded-[12px] overflow-hidden">
+      <div className="relative rounded-[12px] overflow-hidden">
         <div className="relative flex flex-col md:flex-row items-center gap-8 px-8 py-7">
 
           {/* Gauge */}
@@ -82,16 +82,15 @@ export function RiskGauge({ score, openFindings, totalScans }: Props) {
                 transform={`rotate(135 ${cx} ${cy})`}
               />
               <circle
-                cx={cx} cy={cy} r={R}
-                fill="none" stroke={color} strokeWidth={STROKE}
-                strokeDasharray={`${ARC} ${C}`} strokeDashoffset={offset}
-                strokeLinecap="round"
-                transform={`rotate(135 ${cx} ${cy})`}
-                style={{
-                  transition: "stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)",
-                  filter: score === null ? "none" : `drop-shadow(0 0 6px ${color}66)`,
-                }}
-              />
+              cx={cx} cy={cy} r={R}
+              fill="none" stroke={color} strokeWidth={STROKE}
+              strokeDasharray={`${ARC} ${C}`} strokeDashoffset={offset}
+              strokeLinecap="round"
+              transform={`rotate(135 ${cx} ${cy})`}
+              style={{
+                transition: "stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)",
+              }}
+            />
               {ticks.map((t, i) => (
                 <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
                   stroke={t.lit ? color : "rgba(255,255,255,0.10)"} strokeWidth={1.5}
@@ -131,8 +130,6 @@ export function RiskGauge({ score, openFindings, totalScans }: Props) {
             </div>
           </div>
         </div>
-
-        <div className="oculs-scanline" />
       </div>
     </ReticleFrame>
   )

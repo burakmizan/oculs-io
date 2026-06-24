@@ -8,6 +8,7 @@ import {
   scans,
   vulnerabilities,
   apiKeys,
+  teamMembers,
   type User,
   type Organization,
 } from "@/lib/db/schema"
@@ -46,6 +47,25 @@ export async function createCredentialsUser(input: {
     })
     .returning()
   return user
+}
+
+export async function getValidatedTeamId(userId: string): Promise<string> {
+  const cookieStore = await cookies()
+  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+
+  if (activeTeamId === "personal") return "personal"
+
+  try {
+    const [membership] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.teamId, activeTeamId), eq(teamMembers.userId, userId)))
+      .limit(1)
+    
+    return membership ? activeTeamId : "personal"
+  } catch {
+    return "personal"
+  }
 }
 
 /* ── Plans ─────────────────────────────────────────────────────────── */
@@ -194,8 +214,7 @@ const RISK_WEIGHTS: Record<SeverityLevel, number> = {
 export async function getDashboardStats(
   userId: string,
 ): Promise<DashboardStats> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   // Takıma veya kişisele göre Where şartı
   const projectCondition = activeTeamId === "personal" 
@@ -284,8 +303,7 @@ export interface OwaspCell {
 }
 
 export async function getOwaspCoverage(userId: string): Promise<OwaspCell[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   const vulnCondition = activeTeamId === "personal"
     ? eq(vulnerabilities.userId, userId)
@@ -327,8 +345,7 @@ export interface MttrStats {
 }
 
 export async function getMttrStats(userId: string): Promise<MttrStats> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   const vulnCondition = activeTeamId === "personal"
     ? eq(vulnerabilities.userId, userId)
@@ -369,8 +386,7 @@ export interface RiskTrendPoint {
 }
 
 export async function getRiskTrend(userId: string, limit = 20): Promise<RiskTrendPoint[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   const scanCondition = activeTeamId === "personal"
     ? eq(scans.userId, userId)
@@ -413,8 +429,7 @@ export async function getRecentScans(
   userId: string,
   limit = 6,
 ): Promise<RecentScanRow[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   return db
     .select({
@@ -501,8 +516,7 @@ export async function getProjectSettings(
 export async function getUserProjects(
   userId: string,
 ): Promise<ProjectOption[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   return db
     .select({
@@ -532,8 +546,7 @@ export interface ProjectWithStatus extends ProjectOption {
 export async function getUserProjectsWithStatus(
   userId: string,
 ): Promise<ProjectWithStatus[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   const rows = await db
     .select({
@@ -620,8 +633,7 @@ export async function queueScan(input: {
     }
   } catch { /* non-fatal — proceed without org */ }
 
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(input.userId)
   const finalTeamId = activeTeamId === "personal" ? null : activeTeamId
 
   const [project] = await db
@@ -702,8 +714,7 @@ export async function getVulnerabilities(
   userId: string,
   limit = 50,
 ): Promise<VulnerabilityRow[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   return db
     .select({
@@ -811,8 +822,7 @@ export async function getUserScans(
   userId: string,
   limit = 50,
 ): Promise<ScanListRow[]> {
-  const cookieStore = await cookies()
-  const activeTeamId = cookieStore.get("active_team_id")?.value || "personal"
+  const activeTeamId = await getValidatedTeamId(userId)
 
   const rows = await db
     .select({
