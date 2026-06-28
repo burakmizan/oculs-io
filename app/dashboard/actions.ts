@@ -7,7 +7,10 @@ import { detectTechStack } from "@/lib/ai"
 import { db } from "@/lib/db"
 import { scans, vulnerabilities, teams, teamMembers, teamInvites, projects, users, accounts } from "@/lib/db/schema"
 import { cookies } from "next/headers"
-import { eq, and, count, gte } from "drizzle-orm"
+import { eq, and, count, gte, desc } from "drizzle-orm"
+import { callGeminiSast, makeFingerprint, SEVERITY_WEIGHTS, VALID_SEV, VALID_EXPL } from "@/lib/ai/zip-sast"
+import type { SastFinding } from "@/lib/ai/zip-sast"
+import type { SeverityLevel, ExploitabilityLevel } from "@/types"
 import { TOOLS_BY_ID } from "@/lib/tools"
 import type { ScanTool } from "@/types"
 
@@ -87,7 +90,7 @@ export async function createScan(
   if (!REPO_RE.test(repoFullName)) {
     return { error: "Enter a repository as owner/repo." }
   }
-  if (tools.length === 0) {
+  if (tools.length === 0 && !repoFullName.startsWith("zip/")) {
     return { error: "Select at least one scanner to run." }
   }
 
@@ -95,10 +98,12 @@ export async function createScan(
   const [userRecord] = await db.select({ plan: users.plan }).from(users).where(eq(users.id, session.user.id)).limit(1)
   
   if (userRecord?.plan === "starter") {
-    // 1. DAST Engeli
-    const isDastSelected = targetUrlRaw !== "" || tools.some(t => ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"].includes(t))
-    if (isDastSelected) {
-      return { error: "UPGRADE_REQUIRED_DAST" }
+    // 1. DAST Engeli (ZIP projects are always SAST-only)
+    if (!repoFullName.startsWith("zip/")) {
+      const isDastSelected = targetUrlRaw !== "" || tools.some(t => ["owasp_zap", "nuclei", "nikto", "wapiti", "sqlmap", "arachni", "dirsearch", "testssl", "wpscan", "nmap_vulners"].includes(t))
+      if (isDastSelected) {
+        return { error: "UPGRADE_REQUIRED_DAST" }
+      }
     }
 
     // 2. Aylık Tarama Limiti (Max 3)
@@ -118,6 +123,172 @@ export async function createScan(
       return { error: "UPGRADE_REQUIRED_SCANS" }
     }
   }
+
+  // ── ZIP RESCAN ────────────────────────────────────────────────────────────
+  if (repoFullName.startsWith("zip/")) {
+    const [zipProject] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.userId, session.user.id), eq(projects.repoFullName, repoFullName)))
+      .limit(1)
+
+    if (!zipProject) return { error: "Project not found." }
+
+    const [lastScan] = await db
+      .select({ id: scans.id, summary: scans.summary })
+      .from(scans)
+      .where(and(eq(scans.projectId, zipProject.id), eq(scans.status, "completed")))
+      .orderBy(desc(scans.createdAt))
+      .limit(1)
+
+    const codeFiles = (lastScan?.summary as any)?.codeFiles as
+      { path: string; content: string }[] | undefined
+
+    const [newScan] = await db
+      .insert(scans)
+      .values({
+        projectId: zipProject.id,
+        userId: session.user.id,
+        branch: "main",
+        tools: ["semgrep"],
+        status: "running",
+        trigger: "manual",
+        startedAt: new Date(),
+      })
+      .returning({ id: scans.id })
+    const zipScanId = newScan!.id
+
+    if (!codeFiles?.length && lastScan) {
+      // Fallback for old scans without codeFiles: copy findings from last scan
+      const prevFindings = await db
+        .select()
+        .from(vulnerabilities)
+        .where(eq(vulnerabilities.scanId, lastScan.id))
+
+      if (prevFindings.length > 0) {
+        const BATCH = 50
+        for (let i = 0; i < prevFindings.length; i += BATCH) {
+          await db.insert(vulnerabilities).values(
+            prevFindings.slice(i, i + BATCH).map(
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              ({ id: _id, scanId: _sid, createdAt: _ca, updatedAt: _ua, ...rest }) => ({
+                ...rest,
+                scanId: zipScanId,
+              }),
+            ) as any[],
+          )
+        }
+      }
+
+      await db.update(scans).set({
+        status: "completed",
+        completedAt: new Date(),
+        vulnerabilitiesCount: prevFindings.length,
+        summary: lastScan.summary,
+      }).where(eq(scans.id, zipScanId))
+    } else {
+      let sastFindings: SastFinding[] = []
+      if (codeFiles && codeFiles.length > 0) {
+        try {
+          sastFindings = await callGeminiSast(codeFiles)
+        } catch (err) {
+          console.error("[createScan/zip] Gemini SAST failed (non-fatal):", err)
+        }
+      }
+
+      const cleanFindings = sastFindings.filter(
+        (f) => f.title && f.filePath && VALID_SEV.has(f.severity as SeverityLevel),
+      )
+
+      if (cleanFindings.length > 0) {
+        const rows = cleanFindings.map((f) => {
+          const sev = VALID_SEV.has(f.triageSeverity as SeverityLevel)
+            ? (f.triageSeverity as SeverityLevel)
+            : (f.severity as SeverityLevel)
+          const expl = VALID_EXPL.has(f.exploitability as ExploitabilityLevel)
+            ? (f.exploitability as ExploitabilityLevel)
+            : null
+          const lineStart = typeof f.lineStart === "number" ? f.lineStart : null
+          const lineEnd   = typeof f.lineEnd   === "number" ? f.lineEnd   : null
+          return {
+            scanId:          zipScanId,
+            projectId:       zipProject.id,
+            userId:          session.user.id,
+            tool:            "semgrep" as const,
+            category:        "sast"   as const,
+            ruleId:          f.ruleId          || null,
+            title:           f.title,
+            description:     f.description     || null,
+            severity:        sev,
+            confidence:      null,
+            exploitability:  expl,
+            cweId:           f.cweId           || null,
+            owaspCategory:   f.owaspCategory   || null,
+            cvssScore:       f.cvssScore       || null,
+            filePath:        f.filePath        || null,
+            lineStart,
+            lineEnd,
+            targetUrl:       null,
+            codeSnippet:     f.codeSnippet     || null,
+            remediation:     f.remediation     || null,
+            aiFixPatch:      null,
+            aiFixExplanation: null,
+            aiFixModel:      null,
+            fixStatus:       "none" as const,
+            status:          "open"  as const,
+            references:      null,
+            fingerprint:     makeFingerprint(
+              f.ruleId || f.title.slice(0, 20),
+              f.filePath,
+              lineStart ?? 0,
+            ),
+            raw: f as unknown as Record<string, unknown>,
+          }
+        })
+        const BATCH = 50
+        try {
+          for (let i = 0; i < rows.length; i += BATCH) {
+            await db.insert(vulnerabilities).values(rows.slice(i, i + BATCH))
+          }
+        } catch (err) {
+          console.error("[createScan/zip] Vulnerability insert failed:", err)
+        }
+      }
+
+      const finalSummary: Record<SeverityLevel, number> = {
+        critical: 0, high: 0, medium: 0, low: 0, info: 0,
+      }
+      for (const f of cleanFindings) {
+        const sev = VALID_SEV.has(f.triageSeverity as SeverityLevel)
+          ? (f.triageSeverity as SeverityLevel)
+          : (f.severity as SeverityLevel)
+        finalSummary[sev]++
+      }
+      const riskScore = Math.min(
+        100,
+        Object.entries(finalSummary).reduce(
+          (acc, [sev, cnt]) => acc + SEVERITY_WEIGHTS[sev as SeverityLevel] * cnt,
+          0,
+        ),
+      )
+      try {
+        await db.update(scans).set({
+          status: "completed",
+          completedAt: new Date(),
+          vulnerabilitiesCount: cleanFindings.length,
+          summary: { ...finalSummary, riskScore, codeFiles: codeFiles ?? [] } as any,
+        }).where(eq(scans.id, zipScanId))
+      } catch (err) {
+        console.error("[createScan/zip] Scan finalize failed:", err)
+      }
+    }
+
+    revalidatePath("/dashboard/projects")
+    revalidatePath("/dashboard/scans")
+    revalidatePath("/dashboard")
+    return { ok: true, scanId: zipScanId }
+  }
+  // ── END ZIP RESCAN ────────────────────────────────────────────────────────
 
   let scanId: string
   try {
