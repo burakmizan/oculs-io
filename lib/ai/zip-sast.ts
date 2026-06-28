@@ -59,7 +59,7 @@ export async function callGeminiSast(
   files: { path: string; content: string }[],
 ): Promise<SastFinding[]> {
   const apiKey = process.env.GEMINI_API_KEY
-  const model  = process.env.GEMINI_MODEL ?? "gemini-2.5-flash"
+  const model  = process.env.GEMINI_MODEL ?? "gemini-3.5-flash"
   if (!apiKey || files.length === 0) return []
 
   const filesSection = files
@@ -93,26 +93,28 @@ Do NOT include any text outside the JSON array.
 SOURCE FILES:
 ${filesSection}`
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 8192,
-          responseMimeType: "application/json",
-        },
-      }),
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 8192,
+      responseMimeType: "application/json",
     },
-  )
+  })
 
-  if (!res.ok) {
-    console.error("[zip-sast] Gemini API error:", res.status, await res.text())
-    return []
+  let res: Response | null = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body },
+    )
+    if (res.ok) break
+    const errText = await res.text()
+    console.error(`[zip-sast] Gemini API error (attempt ${attempt}/3):`, res.status, errText)
+    if (res.status !== 503 && res.status !== 429) break // sadece geçici hatalarda retry
+    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 3000)) // 3s, 6s
   }
+  if (!res || !res.ok) return []
 
   const data = await res.json()
   const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ""
