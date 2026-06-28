@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS "organizations" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "projects" ADD COLUMN "organization_id" uuid;--> statement-breakpoint
-ALTER TABLE "projects" ADD COLUMN "description" text;--> statement-breakpoint
-ALTER TABLE "users" ADD COLUMN "onboarding_completed_at" timestamp;--> statement-breakpoint
+ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "organization_id" uuid;--> statement-breakpoint
+ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "description" text;--> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "onboarding_completed_at" timestamp;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "organizations" ADD CONSTRAINT "organizations_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION

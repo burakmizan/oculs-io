@@ -82,3 +82,4 @@ drizzle/
 *.tgz
 .cache/
 .turbo/
+.vercel

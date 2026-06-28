@@ -790,10 +790,9 @@ Do NOT include any text outside the JSON object.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. correlateFindings — cross-tool attack-chain detection
+// 4. correlateFindings
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Minimal finding shape needed for correlation. */
 export interface CorrelationInput {
   id: string
   title: string
@@ -803,17 +802,11 @@ export interface CorrelationInput {
   cweId: string | null
 }
 
-/**
- * Sends the full set of a scan's findings to Gemini in ONE request and asks
- * which combine into a single attack chain (e.g. an SSRF that reaches a
- * hardcoded cloud credential). Returns the groups; the caller is responsible
- * for tagging + severity elevation. Best-effort: returns [] on any failure.
- */
 export async function correlateFindings(
   findings: CorrelationInput[],
   techStack?: TechStack | null,
 ): Promise<CorrelationGroup[]> {
-  // Need at least two findings to form a chain, and an API key to call out.
+
   if (findings.length < 2 || !GEMINI_API_KEY) return []
 
   const techLine = techStack?.summary ? `This codebase uses: ${techStack.summary}\n\n` : ""
